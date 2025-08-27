@@ -44,6 +44,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 若无法识别量化类型，则回退到默认的设备与精度选择逻辑。
 
+若模型宣称的量化精度无法加载，程序会直接报错，避免悄然回退到其他精度。
+
 > 目录名中的量化后缀即使紧贴在 `ct2` 后（如 `...-ct2int16`、`...-ct2i8f16`）也会被自动识别。
 
 ### CUDA（可选）

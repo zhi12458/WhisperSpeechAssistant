@@ -192,6 +192,7 @@ def load_model(model_path: str, backend: str):
         _model_cache[key] = model
         return model, "cpu", "ggml"
     preferred = detect_model_device_compute(model_path)
+    force_strict = preferred is not None
     if preferred:
         device, first_ct = preferred
     else:
@@ -199,7 +200,12 @@ def load_model(model_path: str, backend: str):
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        if first_ct == "int16":
+            fallbacks = ["int16", "int8", "float32"]
+        elif first_ct == "int8":
+            fallbacks = ["int8", "int16", "float32"]
+        else:
+            fallbacks = [first_ct, "int8", "float32"]
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
@@ -211,6 +217,8 @@ def load_model(model_path: str, backend: str):
             return model, device, ct
         except Exception as e:
             last_err = e
+    if force_strict:
+        raise last_err if last_err else RuntimeError("模型加载失败")
     try:
         model = WhisperModel(model_path, device="cpu", compute_type="float32")
         return model, "cpu", "float32"
