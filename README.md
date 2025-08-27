@@ -1,6 +1,6 @@
 # Whisper 语音识别助手 · Whisper Speech Transcriber
 
-基于 **faster-whisper (CTranslate2)** + **Tkinter** 的离线转写工具：
+基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
 - 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条
 - 支持中文（默认 `language="zh"`），可切换自动检测
@@ -11,6 +11,8 @@
 pip install -r requirements.txt
 python whisper_assistant.py
 ```
+
+依赖中已包含 `pywhispercpp` 以支持 ggml 模型。界面中可在 **CTranslate2** 与 **ggml** 两种后端之间切换，选择 ggml 时需要指定 `.bin`/`.gguf` 模型文件。
 
 > Windows 用户可将 `ffmpeg.exe` 放在程序目录（与 `whisper_assistant.py` 同级）或确保其已在系统 PATH 中；Linux 用户通过系统包管理器安装 `ffmpeg`。
 
@@ -28,8 +30,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 > Windows 11 原生环境目前仅提供 CPU 版本的 `ctranslate2`，如需 GPU 加速建议在 [WSL2](https://learn.microsoft.com/windows/wsl/) 中安装以上依赖；若仅在 Windows 上运行，可忽略 GPU 依赖。
 
 ### 模型放置
-- 将你转换好的 CTranslate2 模型目录命名为：`belle-whisper-large-v3-turbo-ct2i8f16`，并放在 `models/` 子目录（默认会从 `models/belle-whisper-large-v3-turbo-ct2i8f16` 加载）。
-- 或在界面中手动选择模型目录。
+- **CTranslate2**：将转换好的模型目录命名为 `belle-whisper-large-v3-turbo-ct2i8f16` 并放在 `models/` 子目录（默认从该目录加载），或在界面中手动选择目录。
+- **ggml**：下载 `ggml`/`gguf` 模型文件（例如 `ggml-base.bin`），在界面中直接选择该文件即可。
 
 ### CUDA（可选）
 - 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int8`）。
@@ -62,8 +64,9 @@ WhisperSpeechAssistant/
 ├─ README.md
 ├─ LICENSE
 └─ models/
-   └─ belle-whisper-large-v3-turbo-ct2i8f16/
-      └─ ...  # 模型文件
+   ├─ belle-whisper-large-v3-turbo-ct2i8f16/  # CTranslate2 模型目录
+   │   └─ ...
+   └─ ggml-base.bin                           # ggml 模型文件示例
 ```
 
 ## 许可证
