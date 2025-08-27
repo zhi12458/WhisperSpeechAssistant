@@ -14,8 +14,21 @@ python whisper_assistant.py
 
 > Windows 用户可将 `ffmpeg.exe` 放在程序同目录的 `ffmpeg/` 文件夹中；Linux 用户通过系统包管理器安装 `ffmpeg`。
 
+### GPU 依赖（可选）
+
+默认 `requirements.txt` 仅包含 CPU 推理所需的最小依赖。
+若希望启用 GPU (CUDA) 加速，请额外安装：
+
+```bash
+pip install ctranslate2>=3.24.0
+# 根据你的 CUDA 版本选择对应的 PyTorch 发行版，例如 CUDA 12.1:
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+> Windows 11 原生环境目前仅提供 CPU 版本的 `ctranslate2`，如需 GPU 加速建议在 [WSL2](https://learn.microsoft.com/windows/wsl/) 中安装以上依赖；若仅在 Windows 上运行，可忽略 GPU 依赖。
+
 ### 模型放置
-- 将你转换好的 CTranslate2 模型目录命名为：`belle-whisper-large-v3-turbo-ct2f16`，并放在与程序同级目录。  
+- 将你转换好的 CTranslate2 模型目录命名为：`belle-whisper-large-v3-turbo-ct2f16`，并放在与程序同级目录。
 - 或在界面中手动选择模型目录。
 
 ### CUDA（可选）
