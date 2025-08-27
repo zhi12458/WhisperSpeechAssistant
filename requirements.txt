@@ -1,0 +1,2 @@
+faster-whisper>=1.0.0
+# Tkinter 是标准库自带；Windows/macOS 无需安装；Linux 可安装 python3-tk。

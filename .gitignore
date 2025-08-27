@@ -1,0 +1,15 @@
+__pycache__/
+build/
+dist/
+*.spec
+*.log
+*.tmp
+ffmpeg/
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.wav
+*.mp3
+*.m4a
+belle-whisper-large-v3-turbo-ct2f16/
