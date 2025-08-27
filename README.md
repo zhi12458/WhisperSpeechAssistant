@@ -3,6 +3,7 @@
 基于 **faster-whisper (CTranslate2)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
 - 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条
+- 自动识别模型量化类型并选择对应的设备与 `compute_type`（支持 `int8`、`int16`、`float16`、`int8_float16`）
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
 ## 快速开始
@@ -33,6 +34,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 ### CUDA（可选）
 - 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int8`）。
+- 模型目录名或 `config.json` 中含有 `int8`、`int16`、`float16`、`int8_float16` 等字样时，会优先采用匹配的设备与计算精度。
 
 ## 打包为 exe（Windows）
 ```bash

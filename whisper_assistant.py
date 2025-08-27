@@ -90,14 +90,61 @@ def pick_device_and_compute_type():
         pass
     return "cpu", "int8"
 
+def detect_model_device(model_dir: str):
+    """Return a preferred (device, compute_type) based on model quantization."""
+    config_path = os.path.join(model_dir, "config.json")
+    content = ""
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                content = f.read().lower()
+        except Exception:
+            pass
+    base = os.path.basename(os.path.abspath(model_dir)).lower()
+    info = content + " " + base
+    if (
+        "int8_float16" in info
+        or "int8-float16" in info
+        or "int8float16" in info
+        or "int8_f16" in info
+        or "int8-f16" in info
+        or "int8f16" in info
+        or "i8f16" in info
+    ):
+        try:
+            import ctranslate2 as c2  # type: ignore
+            get_cnt = getattr(c2, "get_cuda_device_count", None)
+            if callable(get_cnt) and get_cnt() > 0:
+                return "cuda", "int8_float16"
+        except Exception:
+            pass
+    if "float16" in info or "f16" in info:
+        try:
+            import ctranslate2 as c2  # type: ignore
+            get_cnt = getattr(c2, "get_cuda_device_count", None)
+            if callable(get_cnt) and get_cnt() > 0:
+                return "cuda", "float16"
+        except Exception:
+            pass
+    if "int8" in info or "i8" in info:
+        return "cpu", "int8"
+    if "int16" in info or "i16" in info:
+        return "cpu", "int16"
+    return None
+
 _model_cache = {}
 
 def load_model(model_dir: str):
-    device, first_ct = pick_device_and_compute_type()
-    if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+    picked = detect_model_device(model_dir)
+    if picked:
+        device, first_ct = picked
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        device, first_ct = pick_device_and_compute_type()
+    if device == "cuda":
+        fallbacks = [first_ct, "float16", "float32", "int8"]
+    else:
+        fallbacks = [first_ct, "int8", "int16", "float32", "float16"]
+    fallbacks = [ct for i, ct in enumerate(fallbacks) if ct not in fallbacks[:i]]
     last_err = None
     for ct in fallbacks:
         key = (model_dir, device, ct)
