@@ -18,10 +18,19 @@ APP_TITLE = "Whisper 语音识别助手 (Whisper Speech Transcriber)"
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
     candidates = [os.path.join(exe_dir, "ffmpeg"), exe_dir]
+    found = False
     for c in candidates:
         if os.path.isfile(os.path.join(c, "ffmpeg.exe")) or os.path.isfile(os.path.join(c, "ffmpeg")):
             os.environ["PATH"] = c + os.pathsep + os.environ.get("PATH", "")
+            found = True
             break
+    if not found:
+        msg = "未检测到 ffmpeg 可执行文件，请安装或将其加入系统 PATH。"
+        try:
+            messagebox.showwarning("FFmpeg 未找到", msg)
+        except Exception:
+            pass
+        raise FileNotFoundError(msg)
 
 ensure_ffmpeg_on_path()
 
