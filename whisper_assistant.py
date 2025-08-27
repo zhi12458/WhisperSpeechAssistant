@@ -146,7 +146,9 @@ def transcribe_with_progress(model_dir: str, media_path: str, fmt: str, language
             if p > last_p:
                 last_p = p
                 progress_cb(p)
-        logger(f"[SEG {i}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)}")
+        logger(
+            f"[SEG {i}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+        )
     progress_cb(100)
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
