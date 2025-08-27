@@ -11,6 +11,7 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import json
+import re
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -141,20 +142,18 @@ def detect_model_device_compute(model_path: str):
             pass
     if not quant:
         name = os.path.basename(os.path.abspath(model_path)).lower()
-        # Also consider names with "ct2" prefix stripped to handle patterns like
-        # "belle-whisper-xxx-ct2int16" where the quantization suffix is glued to
-        # "ct2" without a separator.
-        candidates = [name, name.replace("ct2", "")]
-        for cand in candidates:
+        # look for a quantization suffix possibly glued to a trailing "ct2"
+        # (e.g. "...-ct2int16", "...-i8f16").
+        m = re.search(
+            r"(?:-?ct2)?(int8_float16|i8f16|int16|i16|int8|i8|float16|f16)$",
+            name,
+        )
+        if m:
+            q = m.group(1)
             for k, syns in _QUANT_SYNONYMS.items():
-                for s in sorted(syns, key=len, reverse=True):
-                    if s in cand:
-                        quant = k
-                        break
-                if quant:
+                if q in syns:
+                    quant = k
                     break
-            if quant:
-                break
     if quant:
         cuda_available = False
         try:
