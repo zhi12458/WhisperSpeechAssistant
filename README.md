@@ -42,6 +42,17 @@ pyinstaller --onefile --noconsole --name "WhisperTranscriber" whisper_assistant.
 ```
 将生成的 `dist/WhisperTranscriber.exe` 分发给用户即可（同时分发模型目录和 `ffmpeg/ffmpeg.exe`）。
 
+### 创建 Windows 安装包（可选）
+1. 先按上文使用 PyInstaller 生成 `dist/WhisperTranscriber.exe`。
+2. 安装 [Inno Setup](https://jrsoftware.org/)。
+3. 编辑或直接使用仓库中的 `installer/WhisperTranscriber.iss` 脚本，确保路径与 `dist/`、`ffmpeg/` 和模型目录匹配。
+4. 在命令行运行：
+   ```powershell
+   iscc installer\WhisperTranscriber.iss
+   ```
+   在 `installer/` 目录下会生成 `WhisperTranscriberSetup.exe` 安装包。
+5. 将安装包与模型等资源一并分发给用户。
+
 ## 目录建议
 ```
 WhisperSpeechAssistant/
