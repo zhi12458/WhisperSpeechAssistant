@@ -12,7 +12,7 @@ pip install -r requirements.txt
 python whisper_assistant.py
 ```
 
-> Windows 用户可将 `ffmpeg.exe` 放在程序同目录的 `ffmpeg/` 文件夹中；Linux 用户通过系统包管理器安装 `ffmpeg`。
+> Windows 用户可将 `ffmpeg.exe` 放在程序目录（与 `whisper_assistant.py` 同级）或确保其已在系统 PATH 中；Linux 用户通过系统包管理器安装 `ffmpeg`。
 
 ### GPU 依赖（可选）
 
@@ -28,7 +28,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 > Windows 11 原生环境目前仅提供 CPU 版本的 `ctranslate2`，如需 GPU 加速建议在 [WSL2](https://learn.microsoft.com/windows/wsl/) 中安装以上依赖；若仅在 Windows 上运行，可忽略 GPU 依赖。
 
 ### 模型放置
-- 将你转换好的 CTranslate2 模型目录命名为：`belle-whisper-large-v3-turbo-ct2f16`，并放在与程序同级目录。
+- 将你转换好的 CTranslate2 模型目录命名为：`belle-whisper-large-v3-turbo-ct2i8f16`，并放在 `models/` 子目录（默认会从 `models/belle-whisper-large-v3-turbo-ct2i8f16` 加载）。
 - 或在界面中手动选择模型目录。
 
 ### CUDA（可选）
@@ -38,20 +38,21 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --noconsole --name "WhisperTranscriber" whisper_assistant.py \
-  --add-binary "ffmpeg/ffmpeg.exe;ffmpeg"
+  --add-binary "ffmpeg.exe;."
 ```
-将生成的 `dist/WhisperTranscriber.exe` 分发给用户即可（同时分发模型目录和 `ffmpeg/ffmpeg.exe`）。
+将生成的 `dist/WhisperTranscriber.exe` 分发给用户即可（同时分发模型目录和 `ffmpeg.exe`）。
 
 ## 目录建议
 ```
 WhisperSpeechAssistant/
 ├─ whisper_assistant.py
+├─ ffmpeg.exe
 ├─ requirements.txt
 ├─ README.md
 ├─ LICENSE
-├─ ffmpeg/
-│  └─ ffmpeg.exe          # 可选
-└─ belle-whisper-large-v3-turbo-ct2f16/  # 你的 CTranslate2 模型目录（不建议直接上传到 GitHub）
+└─ models/
+   └─ belle-whisper-large-v3-turbo-ct2i8f16/
+      └─ ...  # 模型文件
 ```
 
 ## 许可证
