@@ -180,7 +180,8 @@ class WhisperApp(tk.Tk):
         self.progress.grid(row=3, column=1, columnspan=2, padx=6, sticky="w")
         self.progress_pct = tk.Label(self, text="0%")
         self.progress_pct.grid(row=3, column=2, sticky="e", padx=10)
-        tk.Button(self, text="开始转写", width=12, command=self.on_run).grid(row=4, column=1, pady=6, sticky="e")
+        self.start_button = tk.Button(self, text="开始转写", width=12, command=self.on_run)
+        self.start_button.grid(row=4, column=1, pady=6, sticky="e")
         tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=4, column=2, pady=6, sticky="w")
         tk.Label(self, text="日志:").grid(row=5, column=0, sticky="nw", padx=12, pady=8)
         self.log_text = tk.Text(self, height=10, width=92, state="disabled")
@@ -251,9 +252,7 @@ class WhisperApp(tk.Tk):
         self.after(120, self.poll_queue)
 
     def set_running(self, running: bool):
-        for child in self.grid_slaves(row=4, column=1):
-            if isinstance(child, tk.Button) and child["text"] == "开始转写":
-                child.config(state=("disabled" if running else "normal"))
+        self.start_button.config(state="disabled" if running else "normal")
 
     def on_open_folder(self):
         if self.last_output and os.path.exists(self.last_output):
