@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import json
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -114,6 +115,65 @@ def pick_device_and_compute_type():
 
 _model_cache = {}
 
+
+def detect_model_device_compute(model_path: str):
+    """Try to infer preferred (device, compute_type) from model quantization."""
+    quant = None
+    config_path = os.path.join(model_path, "config.json")
+    _QUANT_SYNONYMS = {
+        "int8_float16": ["int8_float16", "i8f16"],
+        "float16": ["float16", "f16"],
+        "int16": ["int16", "i16"],
+        "int8": ["int8", "i8"],
+    }
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                q = data.get("quantization")
+                if isinstance(q, str):
+                    q = q.lower()
+                    for k, syns in _QUANT_SYNONYMS.items():
+                        if q in syns:
+                            quant = k
+                            break
+        except Exception:
+            pass
+    if not quant:
+        name = os.path.basename(os.path.abspath(model_path)).lower()
+        for k, syns in _QUANT_SYNONYMS.items():
+            for s in sorted(syns, key=len, reverse=True):
+                if s in name:
+                    quant = k
+                    break
+            if quant:
+                break
+    if quant:
+        cuda_available = False
+        try:
+            import ctranslate2 as c2  # type: ignore
+            get_cnt = getattr(c2, "get_cuda_device_count", None)
+            if callable(get_cnt) and get_cnt() > 0:
+                cuda_available = True
+        except Exception:
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    cuda_available = True
+            except Exception:
+                pass
+        if quant == "int8":
+            return "cpu", "int8"
+        if quant == "int16":
+            return "cpu", "int16"
+        if quant == "float16" and cuda_available:
+            return "cuda", "float16"
+        if quant == "int8_float16":
+            if cuda_available:
+                return "cuda", "float16"
+            return "cpu", "int8"
+    return None
+
 def load_model(model_path: str, backend: str):
     if backend == "ggml":
         key = ("ggml", model_path)
@@ -125,7 +185,11 @@ def load_model(model_path: str, backend: str):
         model = Model(model_path, n_threads=n_threads)
         _model_cache[key] = model
         return model, "cpu", "ggml"
-    device, first_ct = pick_device_and_compute_type()
+    preferred = detect_model_device_compute(model_path)
+    if preferred:
+        device, first_ct = preferred
+    else:
+        device, first_ct = pick_device_and_compute_type()
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
     else:

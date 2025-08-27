@@ -3,6 +3,7 @@
 基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
 - 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条
+- 模型精度自动识别及设备选择（`int8`/`i8`/`int16`/`i16`/`float16`/`f16`/`int8_float16`/`i8f16`）
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
 ## 快速开始
@@ -32,6 +33,16 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 ### 模型放置
 - **CTranslate2**：将转换好的模型目录命名为 `belle-whisper-large-v3-turbo-ct2i8f16` 并放在 `models/` 子目录（默认从该目录加载），或在界面中手动选择目录。
 - **ggml**：下载 `ggml`/`gguf` 模型文件（例如 `ggml-base.bin`），在界面中直接选择该文件即可。
+
+### 模型精度自动识别及设备选择
+程序会从模型目录的 `config.json` 或目录名称中推断量化方式，并优先选择对应的 `(device, compute_type)` 组合：
+
+- `int8`/`i8` → `cpu` + `int8`
+- `int16`/`i16` → `cpu` + `int16`
+- `float16`/`f16` 且检测到 GPU → `cuda` + `float16`
+- `int8_float16`/`i8f16` → 有 GPU 时 `cuda` + `float16`，否则 `cpu` + `int8`
+
+若无法识别量化类型，则回退到默认的设备与精度选择逻辑。
 
 ### CUDA（可选）
 - 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int8`）。
