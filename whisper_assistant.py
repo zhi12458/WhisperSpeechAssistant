@@ -141,10 +141,17 @@ def detect_model_device_compute(model_path: str):
             pass
     if not quant:
         name = os.path.basename(os.path.abspath(model_path)).lower()
-        for k, syns in _QUANT_SYNONYMS.items():
-            for s in sorted(syns, key=len, reverse=True):
-                if s in name:
-                    quant = k
+        # Also consider names with "ct2" prefix stripped to handle patterns like
+        # "belle-whisper-xxx-ct2int16" where the quantization suffix is glued to
+        # "ct2" without a separator.
+        candidates = [name, name.replace("ct2", "")]
+        for cand in candidates:
+            for k, syns in _QUANT_SYNONYMS.items():
+                for s in sorted(syns, key=len, reverse=True):
+                    if s in cand:
+                        quant = k
+                        break
+                if quant:
                     break
             if quant:
                 break
