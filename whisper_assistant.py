@@ -69,8 +69,16 @@ def adjust_segments(
     max_chars: int = 20,
     min_duration: float = 1.0,
     max_duration: float = 6.0,
+    buffer_chars: int = 10,
 ):
-    """Adjust subtitle segments to avoid overly short or long captions."""
+    """Adjust subtitle segments to avoid overly short or long captions.
+
+    The algorithm first merges tiny segments, then splits long ones while
+    preferentially cutting at punctuation.  It allows a small buffer to wait
+    for a nearby punctuation mark before forcing a split so that sentences are
+    less likely to be cut in the middle.
+    """
+
     merged = []
     i = 0
     n = len(segments)
@@ -96,21 +104,41 @@ def adjust_segments(
             continue
         duration = seg.end - seg.start
         char_time = duration / max(len(text), 1)
-        max_len = (
-            min(max_chars, int(max_duration / char_time)) if char_time > 0 else max_chars
-        )
+        max_len = min(max_chars, int(max_duration / char_time)) if char_time > 0 else max_chars
         start = seg.start
         buf = ""
+        last_punct = -1
         for ch in text:
             buf += ch
-            if len(buf) >= max_len or (ch in punct and len(buf) >= min_chars):
-                end = start + char_time * len(buf)
-                result.append(SimpleNamespace(start=start, end=end, text=buf.strip()))
-                start = end
-                buf = ""
-        if buf.strip():
+            if ch in punct:
+                last_punct = len(buf)
+            if len(buf) >= max_len:
+                cut = None
+                if last_punct >= min_chars:
+                    cut = last_punct
+                elif len(buf) >= max_len + buffer_chars:
+                    cut = len(buf)
+                if cut:
+                    seg_text = buf[:cut].strip()
+                    end = start + char_time * cut
+                    if result and len(seg_text) < min_chars:
+                        prev = result[-1]
+                        prev.text += seg_text
+                        prev.end = end
+                    else:
+                        result.append(SimpleNamespace(start=start, end=end, text=seg_text))
+                    start = end
+                    buf = buf[cut:]
+                    last_punct = -1 if last_punct == cut else last_punct - cut
+        leftover = buf.strip()
+        if leftover:
             end = seg.end
-            result.append(SimpleNamespace(start=start, end=end, text=buf.strip()))
+            if result and len(leftover) < min_chars:
+                prev = result[-1]
+                prev.text += leftover
+                prev.end = end
+            else:
+                result.append(SimpleNamespace(start=start, end=end, text=leftover))
     return result
 
 def open_in_explorer(path: str):
