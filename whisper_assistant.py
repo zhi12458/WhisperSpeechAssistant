@@ -119,7 +119,9 @@ _model_cache = {}
 
 def detect_model_device_compute(model_path: str):
     """Try to infer preferred (device, compute_type) from model quantization."""
-    quant = None
+
+    quant_cfg = None
+    quant_dir = None
     config_path = os.path.join(model_path, "config.json")
     _QUANT_SYNONYMS = {
         "int8_float16": ["int8_float16", "i8f16"],
@@ -127,6 +129,22 @@ def detect_model_device_compute(model_path: str):
         "int16": ["int16", "i16"],
         "int8": ["int8", "i8"],
     }
+
+    # First try to infer from the directory name so a user can override an
+    # incorrect or missing config.json declaration.
+    name = os.path.basename(os.path.abspath(model_path)).lower()
+    m = re.search(
+        r"(?:-?ct2)?(int8_float16|i8f16|int16|i16|int8|i8|float16|f16)$",
+        name,
+    )
+    if m:
+        q = m.group(1)
+        for k, syns in _QUANT_SYNONYMS.items():
+            if q in syns:
+                quant_dir = k
+                break
+
+    # Then check config.json if present.
     if os.path.isfile(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -136,24 +154,12 @@ def detect_model_device_compute(model_path: str):
                     q = q.lower()
                     for k, syns in _QUANT_SYNONYMS.items():
                         if q in syns:
-                            quant = k
+                            quant_cfg = k
                             break
         except Exception:
             pass
-    if not quant:
-        name = os.path.basename(os.path.abspath(model_path)).lower()
-        # look for a quantization suffix possibly glued to a trailing "ct2"
-        # (e.g. "...-ct2int16", "...-i8f16").
-        m = re.search(
-            r"(?:-?ct2)?(int8_float16|i8f16|int16|i16|int8|i8|float16|f16)$",
-            name,
-        )
-        if m:
-            q = m.group(1)
-            for k, syns in _QUANT_SYNONYMS.items():
-                if q in syns:
-                    quant = k
-                    break
+
+    quant = quant_dir or quant_cfg
     if quant:
         cuda_available = False
         try:
