@@ -14,6 +14,11 @@ from tkinter import filedialog, messagebox, ttk
 # pip install faster-whisper
 from faster_whisper import WhisperModel
 
+
+class TranscriptionStopped(Exception):
+    """Raised when the transcription is interrupted by the user."""
+    pass
+
 APP_TITLE = "Whisper 语音识别助手 (Whisper Speech Transcriber)"
 
 def ensure_ffmpeg_on_path():
@@ -147,7 +152,16 @@ def load_model(model_path: str, backend: str):
     except Exception:
         raise last_err if last_err else RuntimeError("模型加载失败")
 
-def transcribe_with_progress(model_path: str, media_path: str, fmt: str, language: str, backend: str, logger, progress_cb):
+def transcribe_with_progress(
+    model_path: str,
+    media_path: str,
+    fmt: str,
+    language: str,
+    backend: str,
+    logger,
+    progress_cb,
+    stop_event=None,
+):
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
@@ -178,6 +192,8 @@ def transcribe_with_progress(model_path: str, media_path: str, fmt: str, languag
             logger(
                 f"[SEG {len(seg_list)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
             )
+            if stop_event and stop_event.is_set():
+                raise TranscriptionStopped()
 
         model.transcribe(media_path, language=(language or ""), new_segment_callback=cb, print_progress=False)
         progress_cb(100)
@@ -202,6 +218,8 @@ def transcribe_with_progress(model_path: str, media_path: str, fmt: str, languag
         last_p = 0
         last_end = 0.0
         for i, seg in enumerate(segments, start=1):
+            if stop_event and stop_event.is_set():
+                raise TranscriptionStopped()
             seg_list.append(seg)
             end_t = seg.end if seg.end is not None else last_end
             last_end = end_t
@@ -262,6 +280,8 @@ class WhisperApp(tk.Tk):
         self.progress_pct.grid(row=4, column=2, sticky="e", padx=10)
         self.start_button = tk.Button(self, text="开始转写", width=12, command=self.on_run)
         self.start_button.grid(row=5, column=1, pady=6, sticky="e")
+        self.stop_button = tk.Button(self, text="停止", width=12, command=self.on_stop, state="disabled")
+        self.stop_button.grid(row=5, column=0, pady=6, padx=12, sticky="w")
         tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=5, column=2, pady=6, sticky="w")
         tk.Label(self, text="日志:").grid(row=6, column=0, sticky="nw", padx=12, pady=8)
         self.log_text = tk.Text(self, height=10, width=92, state="disabled")
@@ -317,14 +337,19 @@ class WhisperApp(tk.Tk):
                     self.progress["value"] = p
                     self.progress_pct.config(text=f"{p}%")
             elif isinstance(msg, tuple) and msg and msg[0] == "DONE":
-                ok, payload = msg[1], msg[2]
+                status, payload = msg[1], msg[2]
                 self.progress.stop()
-                if ok:
+                if status is True:
                     self.last_output = payload
                     self.log(f"✅ 完成：{payload}")
                     self.progress["value"] = 100
                     self.progress_pct.config(text="100%")
                     messagebox.showinfo("完成", f"输出文件：{payload}")
+                elif status == "CANCEL":
+                    self.log("⛔ 已取消")
+                    self.progress["value"] = 0
+                    self.progress_pct.config(text="0%")
+                    messagebox.showinfo("已取消", payload)
                 else:
                     self.log("❌ 出错：")
                     self.log(payload)
@@ -336,12 +361,18 @@ class WhisperApp(tk.Tk):
 
     def set_running(self, running: bool):
         self.start_button.config(state="disabled" if running else "normal")
+        self.stop_button.config(state="normal" if running else "disabled")
 
     def on_open_folder(self):
         if self.last_output and os.path.exists(self.last_output):
             open_in_explorer(self.last_output)
         else:
             messagebox.showinfo("提示", "还没有生成任何文件。")
+
+    def on_stop(self):
+        if getattr(self, "stop_event", None):
+            self.stop_event.set()
+            self.log("⏹️ 正在停止...")
 
     def on_run(self):
         model_path = self.model_entry.get().strip()
@@ -372,6 +403,8 @@ class WhisperApp(tk.Tk):
 
         def progress_cb(v):
             self.enqueue(("PROG", v))
+        self.stop_event = threading.Event()
+
         def worker():
             try:
                 outfile = transcribe_with_progress(
@@ -382,12 +415,17 @@ class WhisperApp(tk.Tk):
                     backend=backend,
                     logger=self.enqueue,
                     progress_cb=progress_cb,
+                    stop_event=self.stop_event,
                 )
                 self.enqueue(("DONE", True, outfile))
+            except TranscriptionStopped:
+                self.enqueue(("DONE", "CANCEL", "任务已停止"))
             except Exception as e:
                 err = f"{e}\n{traceback.format_exc()}"
                 self.enqueue(("DONE", False, err))
-        threading.Thread(target=worker, daemon=True).start()
+
+        self.worker_thread = threading.Thread(target=worker, daemon=True)
+        self.worker_thread.start()
 
 if __name__ == "__main__":
     WhisperApp().mainloop()
