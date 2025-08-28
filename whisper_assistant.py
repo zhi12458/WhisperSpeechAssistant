@@ -8,6 +8,8 @@ import threading
 import queue
 import shutil
 import subprocess
+import re
+from types import SimpleNamespace
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -59,6 +61,57 @@ def write_txt(segments, outfile: str):
             text = (seg.text or "").strip()
             if text:
                 f.write(text + "\\n")
+
+
+def adjust_segments(
+    segments,
+    min_chars: int = 5,
+    max_chars: int = 20,
+    min_duration: float = 1.0,
+    max_duration: float = 6.0,
+):
+    """Adjust subtitle segments to avoid overly short or long captions."""
+    merged = []
+    i = 0
+    n = len(segments)
+    while i < n:
+        seg = segments[i]
+        cur = SimpleNamespace(start=seg.start, end=seg.end, text=(seg.text or ""))
+        while (
+            (len(cur.text.strip()) < min_chars or (cur.end - cur.start) < min_duration)
+            and (i + 1) < n
+        ):
+            i += 1
+            nxt = segments[i]
+            cur.text += (nxt.text or "")
+            cur.end = nxt.end
+        merged.append(cur)
+        i += 1
+
+    result = []
+    punct = set("，。！？,.!?；;：:")
+    for seg in merged:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+        duration = seg.end - seg.start
+        char_time = duration / max(len(text), 1)
+        max_len = (
+            min(max_chars, int(max_duration / char_time)) if char_time > 0 else max_chars
+        )
+        start = seg.start
+        buf = ""
+        for ch in text:
+            buf += ch
+            if len(buf) >= max_len or (ch in punct and len(buf) >= min_chars):
+                end = start + char_time * len(buf)
+                result.append(SimpleNamespace(start=start, end=end, text=buf.strip()))
+                start = end
+                buf = ""
+        if buf.strip():
+            end = seg.end
+            result.append(SimpleNamespace(start=start, end=end, text=buf.strip()))
+    return result
 
 def open_in_explorer(path: str):
     try:
@@ -215,6 +268,7 @@ def transcribe_with_progress(model_path: str, media_path: str, fmt: str, languag
             )
         progress_cb(100)
         segments = seg_list
+    segments = adjust_segments(segments)
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
     if fmt == "srt":
