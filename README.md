@@ -35,7 +35,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 - **ggml**：下载 `ggml`/`gguf` 模型文件（例如 `ggml-base.bin`），在界面中直接选择该文件即可。
 
 ### 模型精度自动识别及设备选择
-程序会从模型目录的 `config.json` 或目录名称中推断量化方式，并优先选择对应的 `(device, compute_type)` 组合：
+程序会从模型目录名称中推断量化方式，并优先选择对应的 `(device, compute_type)` 组合：
 
 - `int8`/`i8` → `cpu` + `int8`
 - `int16`/`i16` → `cpu` + `int16`

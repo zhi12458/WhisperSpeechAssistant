@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import json
 import re
 
 # pip install faster-whisper
@@ -120,9 +119,7 @@ _model_cache = {}
 def detect_model_device_compute(model_path: str):
     """Try to infer preferred (device, compute_type) from model quantization."""
 
-    quant_cfg = None
-    quant_dir = None
-    config_path = os.path.join(model_path, "config.json")
+    quant = None
     _QUANT_SYNONYMS = {
         "int8_float16": ["int8_float16", "i8f16"],
         "float16": ["float16", "f16"],
@@ -130,8 +127,7 @@ def detect_model_device_compute(model_path: str):
         "int8": ["int8", "i8"],
     }
 
-    # First try to infer from the directory name so a user can override an
-    # incorrect or missing config.json declaration.
+    # infer from directory name only
     name = os.path.basename(os.path.abspath(model_path)).lower()
     m = re.search(
         r"(?:-?ct2)?(int8_float16|i8f16|int16|i16|int8|i8|float16|f16)$",
@@ -141,25 +137,8 @@ def detect_model_device_compute(model_path: str):
         q = m.group(1)
         for k, syns in _QUANT_SYNONYMS.items():
             if q in syns:
-                quant_dir = k
+                quant = k
                 break
-
-    # Then check config.json if present.
-    if os.path.isfile(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                q = data.get("quantization")
-                if isinstance(q, str):
-                    q = q.lower()
-                    for k, syns in _QUANT_SYNONYMS.items():
-                        if q in syns:
-                            quant_cfg = k
-                            break
-        except Exception:
-            pass
-
-    quant = quant_dir or quant_cfg
     if quant:
         cuda_available = False
         try:
