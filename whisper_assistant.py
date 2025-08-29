@@ -99,51 +99,72 @@ def get_media_duration(media_path: str) -> float | None:
     except Exception:
         return None
 
-def pick_device_and_compute_type():
-    if os.environ.get("WHISPER_FORCE_CPU") == "1":
+def pick_device_and_compute_type(mode: str = "auto"):
+    if mode == "cpu" or os.environ.get("WHISPER_FORCE_CPU") == "1":
         return "cpu", "int8"
-    try:
-        import ctranslate2 as c2  # type: ignore
-        get_cnt = getattr(c2, "get_cuda_device_count", None)
-        if callable(get_cnt) and get_cnt() > 0:
-            return "cuda", "float16"
-    except Exception:
-        pass
-    try:
-        import torch  # type: ignore
-        if torch.cuda.is_available():
-            return "cuda", "float16"
-    except Exception:
-        pass
+    if mode in ("gpu", "auto"):
+        try:
+            import ctranslate2 as c2  # type: ignore
+            get_cnt = getattr(c2, "get_cuda_device_count", None)
+            if callable(get_cnt) and get_cnt() > 0:
+                return "cuda", "float16"
+        except Exception:
+            pass
+        try:
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                return "cuda", "float16"
+        except Exception:
+            pass
     return "cpu", "int8"
 
 _model_cache = {}
 
-def load_model(model_path: str, backend: str):
+def load_model(model_path: str, backend: str, device_mode: str = "auto"):
+    warn_msg = None
     if backend == "ggml":
-        key = ("ggml", model_path)
-        if key in _model_cache:
-            return _model_cache[key], "cpu", "ggml"
         from pywhispercpp.model import Model  # type: ignore
 
         n_threads = os.cpu_count() or 4
         params = {}
         device = "cpu"
-        try:
-            import torch  # type: ignore
-            if torch.cuda.is_available():
-                params["n_gpu_layers"] = 99
-                device = "cuda"
-        except Exception:
-            pass
+        if device_mode == "gpu":
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    params["n_gpu_layers"] = 99
+                    device = "cuda"
+                else:
+                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+            except Exception:
+                warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+        elif device_mode == "auto":
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    params["n_gpu_layers"] = 99
+                    device = "cuda"
+            except Exception:
+                pass
+        key = ("ggml", model_path, device)
+        if key in _model_cache:
+            return _model_cache[key], device, "ggml", warn_msg
         try:
             model = Model(model_path, n_threads=n_threads, **params)
         except Exception:
-            model = Model(model_path, n_threads=n_threads)
-            device = "cpu"
+            if device == "cuda":
+                warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                params = {}
+                device = "cpu"
+                key = ("ggml", model_path, device)
+                model = Model(model_path, n_threads=n_threads)
+            else:
+                raise
         _model_cache[key] = model
-        return model, device, "ggml"
-    device, first_ct = pick_device_and_compute_type()
+        return model, device, "ggml", warn_msg
+    device, first_ct = pick_device_and_compute_type(device_mode)
+    if device_mode == "gpu" and device != "cuda":
+        warn_msg = "GPU 初始化失败，已切回 CPU 模式"
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
     else:
@@ -152,18 +173,35 @@ def load_model(model_path: str, backend: str):
     for ct in fallbacks:
         key = (model_path, device, ct)
         if key in _model_cache:
-            return _model_cache[key], device, ct
+            return _model_cache[key], device, ct, warn_msg
         try:
             model = WhisperModel(model_path, device=device, compute_type=ct)
             _model_cache[key] = model
-            return model, device, ct
+            return model, device, ct, warn_msg
         except Exception as e:
             last_err = e
-    try:
-        model = WhisperModel(model_path, device="cpu", compute_type="float32")
-        return model, "cpu", "float32"
-    except Exception:
-        raise last_err if last_err else RuntimeError("模型加载失败")
+    if device == "cuda":
+        if device_mode == "gpu":
+            warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+        device = "cpu"
+        last_err = None
+        for ct in ["int16", "float32", "float16"]:
+            key = (model_path, device, ct)
+            if key in _model_cache:
+                return _model_cache[key], device, ct, warn_msg
+            try:
+                model = WhisperModel(model_path, device=device, compute_type=ct)
+                _model_cache[key] = model
+                return model, device, ct, warn_msg
+            except Exception as e:
+                last_err = e
+    if device_mode == "auto":
+        try:
+            model = WhisperModel(model_path, device="cpu", compute_type="float32")
+            return model, "cpu", "float32", warn_msg
+        except Exception:
+            raise last_err if last_err else RuntimeError("模型加载失败")
+    raise last_err if last_err else RuntimeError("模型加载失败")
 
 def transcribe_with_progress(
     model_path: str,
@@ -174,14 +212,21 @@ def transcribe_with_progress(
     logger,
     progress_cb,
     stop_event=None,
+    device_mode: str = "auto",
 ):
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
         backend = "ggml"
-    model, device, compute_type = load_model(model_path, backend)
+    model, device, compute_type, warn_msg = load_model(model_path, backend, device_mode=device_mode)
+    if warn_msg:
+        logger(f"[WARN] {warn_msg}")
+        try:
+            messagebox.showwarning("GPU 初始化失败", warn_msg)
+        except Exception:
+            pass
     if backend == "ggml":
-        logger(f"[INFO] Using ggml backend")
+        logger(f"[INFO] Using ggml backend (device={device})")
         duration = get_media_duration(media_path)
         if not duration or duration <= 0:
             progress_cb(("mode", "indeterminate"))
@@ -269,6 +314,9 @@ class WhisperApp(tk.Tk):
         self.backend_var = tk.StringVar(value="ct2")
         tk.Radiobutton(self, text="CTranslate2", variable=self.backend_var, value="ct2").grid(row=0, column=1, sticky="w")
         tk.Radiobutton(self, text="ggml", variable=self.backend_var, value="ggml").grid(row=0, column=2, sticky="w")
+        tk.Label(self, text="设备:").grid(row=0, column=3, sticky="w")
+        self.device_var = tk.StringVar(value="auto")
+        ttk.Combobox(self, values=["auto", "cpu", "gpu"], width=8, state="readonly", textvariable=self.device_var).grid(row=0, column=4, padx=6, sticky="w")
         tk.Label(self, text="模型路径:").grid(row=1, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
         self.model_entry.insert(0, default_model_dir)
@@ -409,6 +457,8 @@ class WhisperApp(tk.Tk):
         self.log(f"开始转写：{media_path}")
         self.log(f"使用模型：{model_path} (后端：{backend})")
         self.log(f"输出格式：{fmt.upper()}，语言：{lang}")
+        device_mode = self.device_var.get()
+        self.log(f"设备：{device_mode}")
         self.set_running(True)
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
@@ -429,6 +479,7 @@ class WhisperApp(tk.Tk):
                     logger=self.enqueue,
                     progress_cb=progress_cb,
                     stop_event=self.stop_event,
+                    device_mode=device_mode,
                 )
                 self.enqueue(("DONE", True, outfile))
             except TranscriptionStopped:
