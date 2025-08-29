@@ -251,7 +251,7 @@ class WhisperApp(tk.Tk):
         self.worker_thread = None
         self.last_output = None
         exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-        default_model_dir = os.path.join(exe_dir, "models", "belle-whisper-large-v3-turbo-ct2i8f16")
+        default_model_dir = os.path.join(exe_dir, "models", "belle-whisper-large-v3-turbo-ct2-i8f16")
         tk.Label(self, text="后端:").grid(row=0, column=0, sticky="w", padx=12, pady=8)
         self.backend_var = tk.StringVar(value="ct2")
         tk.Radiobutton(self, text="CTranslate2", variable=self.backend_var, value="ct2").grid(row=0, column=1, sticky="w")
