@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
+from faster_whisper.audio import load_audio
 
 
 class TranscriptionStopped(Exception):
@@ -206,6 +207,51 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
             raise last_err if last_err else RuntimeError("模型加载失败")
     raise last_err if last_err else RuntimeError("模型加载失败")
 
+
+def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_event):
+    """
+    Process the entire audio in ~30s windows, accumulating segments.
+    This mimics the "runFull" strategy where the whole file is read
+    once and recognition happens on internal chunks that are later
+    concatenated.
+    """
+    audio = load_audio(media_path)
+    sample_rate = 16000
+    total = len(audio)
+    if total <= 0:
+        return []
+    progress_cb(("mode", "determinate"))
+    progress_cb(0)
+    chunk_samples = sample_rate * 30
+    segments = []
+    offset = 0.0
+    last_p = 0
+    for start in range(0, total, chunk_samples):
+        end = min(total, start + chunk_samples)
+        if stop_event and stop_event.is_set():
+            raise TranscriptionStopped()
+        chunk = audio[start:end]
+        sub_segments, _ = model.transcribe(
+            audio=chunk,
+            language=language,
+            beam_size=5,
+            word_timestamps=False,
+        )
+        for seg in sub_segments:
+            seg.start = (seg.start or 0.0) + offset
+            seg.end = (seg.end or 0.0) + offset
+            segments.append(seg)
+            logger(
+                f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+            )
+        offset += (end - start) / sample_rate
+        p = int(min(100, (end / total) * 100))
+        if p > last_p:
+            last_p = p
+            progress_cb(p)
+    progress_cb(100)
+    return segments
+
 def transcribe_with_progress(
     model_path: str,
     media_path: str,
@@ -261,39 +307,14 @@ def transcribe_with_progress(
         segments = seg_list
     else:
         logger(f"[INFO] Using device={device}, compute_type={compute_type}")
-        segments, info = model.transcribe(
+        segments = run_full_transcribe(
+            model,
             media_path,
-            language=language,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-            beam_size=5,
-            word_timestamps=False,
+            language,
+            logger,
+            progress_cb,
+            stop_event,
         )
-        duration = getattr(info, "duration", None)
-        if not duration or duration <= 0:
-            progress_cb(("mode", "indeterminate"))
-        else:
-            progress_cb(("mode", "determinate"))
-            progress_cb(0)
-        seg_list = []
-        last_p = 0
-        last_end = 0.0
-        for i, seg in enumerate(segments, start=1):
-            if stop_event and stop_event.is_set():
-                raise TranscriptionStopped()
-            seg_list.append(seg)
-            end_t = seg.end if seg.end is not None else last_end
-            last_end = end_t
-            if duration and duration > 0:
-                p = int(min(100, max(0, (end_t / duration) * 100)))
-                if p > last_p:
-                    last_p = p
-                    progress_cb(p)
-            logger(
-                f"[SEG {i}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
-            )
-        progress_cb(100)
-        segments = seg_list
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
     if fmt == "srt":
