@@ -127,7 +127,15 @@ def load_model(model_path: str, backend: str):
         from pywhispercpp.model import Model  # type: ignore
 
         n_threads = os.cpu_count() or 4
-        model = Model(model_path, n_threads=n_threads)
+        try:
+            model = Model(model_path, n_threads=n_threads, n_gpu_layers=99)
+        except (RuntimeError, OSError) as e:
+            print(f"[WARN] GPU initialization failed, falling back to CPU mode: {e}")
+            try:
+                messagebox.showwarning("GPU 初始化失败", "GPU 初始化失败，将使用 CPU 模式。")
+            except Exception:
+                pass
+            model = Model(model_path, n_threads=n_threads, n_gpu_layers=0)
         _model_cache[key] = model
         return model, "cpu", "ggml"
     device, first_ct = pick_device_and_compute_type()
