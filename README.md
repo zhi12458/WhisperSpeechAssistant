@@ -2,7 +2,7 @@
 
 基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
-- 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条
+- 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条；ggml 后端在具备 CUDA 支持时也会自动启用 GPU
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
 ## 快速开始
@@ -35,6 +35,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 ### CUDA（可选）
 - 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int8`）。
+- ggml 后端若在安装 `pywhispercpp` 时启用了 `GGML_CUDA=1`，同样会自动尝试使用 GPU。
 
 ## 打包为 exe（Windows）
 ```bash

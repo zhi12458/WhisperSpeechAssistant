@@ -127,9 +127,22 @@ def load_model(model_path: str, backend: str):
         from pywhispercpp.model import Model  # type: ignore
 
         n_threads = os.cpu_count() or 4
-        model = Model(model_path, n_threads=n_threads)
+        params = {}
+        device = "cpu"
+        try:
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                params["n_gpu_layers"] = 99
+                device = "cuda"
+        except Exception:
+            pass
+        try:
+            model = Model(model_path, n_threads=n_threads, **params)
+        except Exception:
+            model = Model(model_path, n_threads=n_threads)
+            device = "cpu"
         _model_cache[key] = model
-        return model, "cpu", "ggml"
+        return model, device, "ggml"
     device, first_ct = pick_device_and_compute_type()
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
