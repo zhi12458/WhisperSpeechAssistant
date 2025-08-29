@@ -2,7 +2,7 @@
 
 基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
-- 自动检测 **GPU(CUDA)** 或 **CPU**，支持进度条；ggml 后端在具备 CUDA 支持时也会自动启用 GPU
+- 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
 ## 快速开始
