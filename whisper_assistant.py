@@ -99,22 +99,18 @@ def get_media_duration(media_path: str) -> float | None:
     except Exception:
         return None
 
-def pick_device_and_compute_type():
+def pick_device_and_compute_type(model_path: str):
     if os.environ.get("WHISPER_FORCE_CPU") == "1":
         return "cpu", "int8"
-    try:
-        import ctranslate2 as c2  # type: ignore
-        get_cnt = getattr(c2, "get_cuda_device_count", None)
-        if callable(get_cnt) and get_cnt() > 0:
-            return "cuda", "float16"
-    except Exception:
-        pass
-    try:
-        import torch  # type: ignore
-        if torch.cuda.is_available():
-            return "cuda", "float16"
-    except Exception:
-        pass
+    name = os.path.basename(model_path.rstrip("/\\")).lower()
+    suffix = name.split("-")[-1]
+    if suffix == "int16":
+        return "cpu", "int16"
+    if suffix in {"i8f16", "int8_float16", "int8float16"}:
+        return "cpu", "int8_float16"
+    if suffix in {"f16", "float16"}:
+        return "cuda", "float16"
+    print(f"[WARN] 无法识别模型类型后缀：{suffix}，默认使用 CPU int8")
     return "cpu", "int8"
 
 _model_cache = {}
@@ -130,7 +126,7 @@ def load_model(model_path: str, backend: str):
         model = Model(model_path, n_threads=n_threads)
         _model_cache[key] = model
         return model, "cpu", "ggml"
-    device, first_ct = pick_device_and_compute_type()
+    device, first_ct = pick_device_and_compute_type(model_path)
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
     else:
