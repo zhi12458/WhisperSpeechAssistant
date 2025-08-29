@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import re
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -119,6 +120,56 @@ def pick_device_and_compute_type():
 
 _model_cache = {}
 
+
+def detect_model_device_compute(model_path: str):
+    """Try to infer preferred (device, compute_type) from model quantization."""
+
+    quant = None
+    _QUANT_SYNONYMS = {
+        "int8_float16": ["int8_float16", "i8f16"],
+        "float16": ["float16", "f16"],
+        "int16": ["int16", "i16"],
+        "int8": ["int8", "i8"],
+    }
+
+    # infer from directory name only
+    name = os.path.basename(os.path.abspath(model_path)).lower()
+    m = re.search(
+        r"(?:-?ct2)?(int8_float16|i8f16|int16|i16|int8|i8|float16|f16)$",
+        name,
+    )
+    if m:
+        q = m.group(1)
+        for k, syns in _QUANT_SYNONYMS.items():
+            if q in syns:
+                quant = k
+                break
+    if quant:
+        cuda_available = False
+        try:
+            import ctranslate2 as c2  # type: ignore
+            get_cnt = getattr(c2, "get_cuda_device_count", None)
+            if callable(get_cnt) and get_cnt() > 0:
+                cuda_available = True
+        except Exception:
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    cuda_available = True
+            except Exception:
+                pass
+        if quant == "int8":
+            return "cpu", "int8"
+        if quant == "int16":
+            return "cpu", "int16"
+        if quant == "float16" and cuda_available:
+            return "cuda", "float16"
+        if quant == "int8_float16":
+            if cuda_available:
+                return "cuda", "float16"
+            return "cpu", "int8"
+    return None
+
 def load_model(model_path: str, backend: str):
     if backend == "ggml":
         key = ("ggml", model_path)
@@ -130,11 +181,31 @@ def load_model(model_path: str, backend: str):
         model = Model(model_path, n_threads=n_threads)
         _model_cache[key] = model
         return model, "cpu", "ggml"
-    device, first_ct = pick_device_and_compute_type()
-    if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+    preferred = detect_model_device_compute(model_path)
+    if preferred:
+        device, first_ct = preferred
+        force_strict = True
+        if device == "cuda":
+            fallbacks = [first_ct, "float32"]
+        else:
+            if first_ct == "int16":
+                fallbacks = ["int16", "float32"]
+            elif first_ct == "int8":
+                fallbacks = ["int8", "float32"]
+            else:
+                fallbacks = [first_ct, "float32"]
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        device, first_ct = pick_device_and_compute_type()
+        force_strict = False
+        if device == "cuda":
+            fallbacks = [first_ct, "float32", "int8"]
+        else:
+            if first_ct == "int16":
+                fallbacks = ["int16", "int8", "float32"]
+            elif first_ct == "int8":
+                fallbacks = ["int8", "int16", "float32"]
+            else:
+                fallbacks = [first_ct, "int8", "float32"]
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
@@ -146,6 +217,8 @@ def load_model(model_path: str, backend: str):
             return model, device, ct
         except Exception as e:
             last_err = e
+    if force_strict:
+        raise last_err if last_err else RuntimeError("模型加载失败")
     try:
         model = WhisperModel(model_path, device="cpu", compute_type="float32")
         return model, "cpu", "float32"
