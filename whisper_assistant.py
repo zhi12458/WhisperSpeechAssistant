@@ -321,9 +321,15 @@ class WhisperApp(tk.Tk):
 
         tk.Label(self, text="设备:").grid(row=1, column=0, sticky="w", padx=12)
         self.device_var = tk.StringVar(value="auto")
-        tk.Radiobutton(self, text="auto", variable=self.device_var, value="auto").grid(row=1, column=1, sticky="w")
-        tk.Radiobutton(self, text="cpu", variable=self.device_var, value="cpu").grid(row=1, column=2, sticky="w")
-        tk.Radiobutton(self, text="gpu", variable=self.device_var, value="gpu").grid(row=1, column=3, sticky="w")
+        self.device_combo = ttk.Combobox(
+            self,
+            textvariable=self.device_var,
+            values=["auto", "cpu", "gpu"],
+            width=8,
+            state="readonly",
+        )
+        self.device_combo.current(0)
+        self.device_combo.grid(row=1, column=1, sticky="w")
 
         tk.Label(self, text="模型路径:").grid(row=2, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
