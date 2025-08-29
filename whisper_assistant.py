@@ -135,9 +135,9 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
                     params["n_gpu_layers"] = 99
                     device = "cuda"
                 else:
-                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                    raise RuntimeError
             except Exception:
-                warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
         elif device_mode == "auto":
             try:
                 import torch  # type: ignore
@@ -153,6 +153,8 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
             model = Model(model_path, n_threads=n_threads, **params)
         except Exception:
             if device == "cuda":
+                if device_mode == "gpu":
+                    raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
                 warn_msg = "GPU 初始化失败，已切回 CPU 模式"
                 params = {}
                 device = "cpu"
@@ -164,7 +166,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
         return model, device, "ggml", warn_msg
     device, first_ct = pick_device_and_compute_type(device_mode)
     if device_mode == "gpu" and device != "cuda":
-        warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+        raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
     if device == "cuda":
         fallbacks = [first_ct, "float32", "int8"]
     else:
@@ -182,7 +184,8 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
             last_err = e
     if device == "cuda":
         if device_mode == "gpu":
-            warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+            raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+        warn_msg = "GPU 初始化失败，已切回 CPU 模式"
         device = "cpu"
         last_err = None
         for ct in ["int16", "float32", "float16"]:
@@ -316,7 +319,14 @@ class WhisperApp(tk.Tk):
         tk.Radiobutton(self, text="ggml", variable=self.backend_var, value="ggml").grid(row=0, column=2, sticky="w")
         tk.Label(self, text="设备:").grid(row=0, column=3, sticky="w")
         self.device_var = tk.StringVar(value="auto")
-        ttk.Combobox(self, values=["auto", "cpu", "gpu"], width=8, state="readonly", textvariable=self.device_var).grid(row=0, column=4, padx=6, sticky="w")
+        self.device_combo = ttk.Combobox(
+            self,
+            values=["auto", "cpu", "gpu"],
+            width=8,
+            state="readonly",
+            textvariable=self.device_var,
+        )
+        self.device_combo.grid(row=0, column=4, padx=6, sticky="w")
         tk.Label(self, text="模型路径:").grid(row=1, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
         self.model_entry.insert(0, default_model_dir)
