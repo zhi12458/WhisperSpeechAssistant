@@ -13,7 +13,12 @@ from tkinter import filedialog, messagebox, ttk
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
-from faster_whisper.audio import load_audio
+# ``load_audio`` was removed in recent versions of ``faster-whisper``.
+# ``decode_audio`` is a drop-in replacement that returns the raw audio
+# samples resampled to the requested rate (16 kHz by default).
+# Import it here and alias it back to ``load_audio`` so the rest of the
+# codebase can continue to call ``load_audio`` transparently.
+from faster_whisper.audio import decode_audio as load_audio
 
 
 class TranscriptionStopped(Exception):
