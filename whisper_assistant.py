@@ -335,6 +335,10 @@ class WhisperApp(tk.Tk):
         # slightly taller default window and allow resizing so controls stay visible
         self.geometry("760x460")
         self.resizable(True, True)
+        # allow widgets to grow/shrink with window resizing
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=1)
+        self.grid_rowconfigure(7, weight=1)
         self.msg_queue = queue.Queue()
         self.worker_thread = None
         self.last_output = None
@@ -360,12 +364,12 @@ class WhisperApp(tk.Tk):
         tk.Label(self, text="模型路径:").grid(row=2, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
         self.model_entry.insert(0, default_model_dir)
-        self.model_entry.grid(row=2, column=1, padx=6)
+        self.model_entry.grid(row=2, column=1, padx=6, sticky="ew")
         tk.Button(self, text="选择", width=8, command=self.choose_model_path).grid(row=2, column=2, padx=6)
 
         tk.Label(self, text="音/视频文件:").grid(row=3, column=0, sticky="w", padx=12, pady=8)
         self.media_entry = tk.Entry(self, width=62)
-        self.media_entry.grid(row=3, column=1, padx=6)
+        self.media_entry.grid(row=3, column=1, padx=6, sticky="ew")
         tk.Button(self, text="选择", width=8, command=self.choose_media_file).grid(row=3, column=2, padx=6)
 
         tk.Label(self, text="输出格式:").grid(row=4, column=0, sticky="w", padx=12, pady=8)
@@ -379,7 +383,7 @@ class WhisperApp(tk.Tk):
 
         tk.Label(self, text="进度:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
         self.progress = ttk.Progressbar(self, orient="horizontal", length=560, mode="determinate", maximum=100)
-        self.progress.grid(row=5, column=1, columnspan=2, padx=6, sticky="w")
+        self.progress.grid(row=5, column=1, columnspan=2, padx=6, sticky="ew")
         self.progress_pct = tk.Label(self, text="0%")
         self.progress_pct.grid(row=5, column=2, sticky="e", padx=10)
 
@@ -391,7 +395,7 @@ class WhisperApp(tk.Tk):
 
         tk.Label(self, text="日志:").grid(row=7, column=0, sticky="nw", padx=12, pady=8)
         self.log_text = tk.Text(self, height=10, width=92, state="disabled")
-        self.log_text.grid(row=7, column=1, columnspan=2, padx=6, pady=6)
+        self.log_text.grid(row=7, column=1, columnspan=2, padx=6, pady=6, sticky="nsew")
         self.after(100, self.poll_queue)
 
     def choose_model_path(self):
