@@ -10,9 +10,9 @@ SolidCompression=yes
 DisableProgramGroupPage=yes
 
 [Files]
-Source: "dist\\WhisperTranscriber.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "ffmpeg\\ffmpeg.exe"; DestDir: "{app}\\ffmpeg"; Flags: ignoreversion
-Source: "belle-whisper-large-v3-turbo-ct2f16\\*"; DestDir: "{app}\\belle-whisper-large-v3-turbo-ct2f16"; Flags: ignoreversion recursesubdirs
+Source: "..\\dist\\WhisperTranscriber.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\\ffmpeg.exe"; DestDir: "{app}\\ffmpeg"; Flags: ignoreversion
+Source: "..\\models\\belle-whisper-large-v3-turbo-ct2-i8f16\\*"; DestDir: "{app}\\belle-whisper-large-v3-turbo-ct2-i8f16"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\\Whisper Transcriber"; Filename: "{app}\\WhisperTranscriber.exe"
