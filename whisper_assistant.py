@@ -58,8 +58,11 @@ def detect_voice(audio: np.ndarray, sample_rate: int = 16000) -> int:
     """
     if audio.size == 0:
         return 0
+    # quick amplitude check to filter out near-zero signals
+    if float(np.max(np.abs(audio))) < 0.01:
+        return 0
     energy = float(np.sqrt(np.mean(audio ** 2)))
-    if energy < 5e-4:
+    if energy < 1e-3:
         return 0
     if librosa is None:
         # Fall back to a simple energy-based VAD when librosa is unavailable
@@ -69,7 +72,7 @@ def detect_voice(audio: np.ndarray, sample_rate: int = 16000) -> int:
         if np.all(np.isnan(f0)) or np.nanmean(f0) < 80:
             return 0
         flat = float(np.mean(librosa.feature.spectral_flatness(y=audio)))
-        if flat > 0.2:
+        if not np.isfinite(flat) or flat > 0.2:
             return 0
     except Exception:
         # If feature extraction fails treat it as silence
