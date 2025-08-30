@@ -5,6 +5,12 @@
 - 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
+## 项目背景 · Motivation
+
+我最初使用 **WhisperDesktop** 作为转写工具，但该项目已长期停止维护，无法很好地兼容最新的 **Whisper v3** 和 **Whisper v3-turbo** 模型。为获得持续升级的体验，我基于 **faster-whisper** 与 **whisper.cpp** 重新实现了这个开源助手。
+
+I initially relied on **WhisperDesktop** for transcription, yet it has not been updated for a long time and fails to work with the latest **Whisper v3** and **Whisper v3-turbo** models. To keep pace with new releases, I built this open-source assistant on top of **faster-whisper** and **whisper.cpp**.
+
 ## 快速开始
 
 ```bash
