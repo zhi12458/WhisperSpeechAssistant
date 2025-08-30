@@ -225,7 +225,7 @@ def run_full_transcribe(
     max_tokens: int | None = None,
 ):
     """
-    Process the entire audio in ~20s windows, accumulating segments.
+    Process the entire audio in ~30s windows, accumulating segments.
     This mimics the "runFull" strategy where the whole file is read
     once and recognition happens on internal chunks that are later
     concatenated.
@@ -237,7 +237,7 @@ def run_full_transcribe(
         return []
     progress_cb(("mode", "determinate"))
     progress_cb(0)
-    chunk_samples = sample_rate * 20
+    chunk_samples = sample_rate * 30
     segments = []
     offset = 0.0
     last_p = 0
