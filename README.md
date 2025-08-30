@@ -12,6 +12,8 @@ pip install -r requirements.txt
 python whisper_assistant.py
 ```
 
+> 若未安装 `librosa`，程序会退化为简化的能量判定，静音检测精度会降低；建议按上方指令安装完整依赖。
+
 依赖中已包含 `pywhispercpp` 以支持 ggml 模型。界面中可在 **CTranslate2** 与 **ggml** 两种后端之间切换，选择 ggml 时需要指定 `.bin`/`.gguf` 模型文件。
 
 > Windows 用户可将 `ffmpeg.exe` 放在程序目录（与 `whisper_assistant.py` 同级）或确保其已在系统 PATH 中；Linux 用户通过系统包管理器安装 `ffmpeg`。

@@ -13,7 +13,14 @@ from tkinter import filedialog, messagebox, ttk
 from dataclasses import dataclass
 
 import numpy as np
-import librosa
+try:
+    import librosa  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - dependency is optional
+    librosa = None
+    print(
+        "[WARN] librosa 未安装，语音活动检测将退化为能量阈值。"
+        "建议运行 'pip install -r requirements.txt' 以获得更准确的检测。"
+    )
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -54,6 +61,9 @@ def detect_voice(audio: np.ndarray, sample_rate: int = 16000) -> int:
     energy = float(np.sqrt(np.mean(audio ** 2)))
     if energy < 5e-4:
         return 0
+    if librosa is None:
+        # Fall back to a simple energy-based VAD when librosa is unavailable
+        return 1
     try:
         f0 = librosa.yin(audio, fmin=50, fmax=500, sr=sample_rate)
         if np.all(np.isnan(f0)) or np.nanmean(f0) < 80:
