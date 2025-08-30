@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import re
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -56,13 +57,88 @@ def format_timestamp(seconds: float) -> str:
     h = total_ms // 3_600_000
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
+
+def wrap_srt_text(text: str, max_chars: int = 30) -> list[str]:
+    """Split subtitle text into wrapped lines.
+
+    Strategy
+    --------
+    1. **Sentence first** – split the incoming text on punctuation such as
+       ``。！？!?`` so that complete sentences are handled together.
+    2. **Greedy accumulation** – keep appending sentences to the current line
+       until it would exceed ``max_chars``.  Once the limit is reached the line
+       is flushed to ``lines``.
+    3. **Fallback chunking** – if a single sentence itself is longer than the
+       limit, look for comma/space style separators within the first
+       ``max_chars`` characters.  When none are found the string is sliced at
+       ``max_chars`` to guarantee progress.
+
+    The function preserves every character from ``text`` and returns an ordered
+    list where each element is no longer than ``max_chars``.  This ensures that
+    subtitles remain readable without losing information.
+    """
+    sentences = re.split(r"(?<=[。！？!?])", text)
+    lines: list[str] = []
+    current = ""
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(current) + len(s) <= max_chars:
+            current += s
+        else:
+            if current:
+                lines.append(current)
+            while len(s) > max_chars:
+                break_pos = -1
+                for ch in ("，", ",", " ", ";", "；", "、"):
+                    pos = s.rfind(ch, 0, max_chars)
+                    if pos > break_pos:
+                        break_pos = pos + 1
+                if break_pos <= 0:
+                    lines.append(s[:max_chars])
+                    s = s[max_chars:]
+                else:
+                    lines.append(s[:break_pos])
+                    s = s[break_pos:]
+            current = s
+    if current:
+        lines.append(current)
+    return lines
+
+
 def write_srt(segments, outfile: str):
+    """Write transcription ``segments`` to ``outfile`` in SRT format.
+
+    Each segment's text is first processed by :func:`wrap_srt_text`.  When the
+    wrapper returns multiple lines, the original time range of the segment is
+    divided proportionally so that every line becomes its own SRT entry with a
+    unique timestamp.  This keeps each subtitle entry concise while preserving
+    the full dialogue and temporal alignment.
+    """
     with open(outfile, "w", encoding="utf-8") as f:
-        for idx, seg in enumerate(segments, start=1):
-            start = format_timestamp(seg.start)
-            end = format_timestamp(seg.end)
-            text = (seg.text or "").strip()
-            f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
+        idx = 1
+        for seg in segments:
+            lines = wrap_srt_text((seg.text or "").strip())
+            if not lines:
+                continue
+            start_time = seg.start or 0.0
+            end_time = seg.end or start_time
+            if len(lines) == 1:
+                start = format_timestamp(start_time)
+                end = format_timestamp(end_time)
+                f.write(f"{idx}\n{start} --> {end}\n{lines[0]}\n\n")
+                idx += 1
+            else:
+                duration = end_time - start_time
+                step = duration / len(lines) if duration > 0 else 0
+                for i, line in enumerate(lines):
+                    seg_start = start_time + i * step
+                    seg_end = end_time if i == len(lines) - 1 else start_time + (i + 1) * step
+                    start = format_timestamp(seg_start)
+                    end = format_timestamp(seg_end)
+                    f.write(f"{idx}\n{start} --> {end}\n{line}\n\n")
+                    idx += 1
 
 def write_txt(segments, outfile: str):
     with open(outfile, "w", encoding="utf-8") as f:
