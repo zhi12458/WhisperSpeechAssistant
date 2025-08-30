@@ -215,7 +215,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
 
 def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_event):
     """
-    Process the entire audio in ~30s windows, accumulating segments.
+    Process the entire audio in ~20s windows, accumulating segments.
     This mimics the "runFull" strategy where the whole file is read
     once and recognition happens on internal chunks that are later
     concatenated.
@@ -227,7 +227,7 @@ def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_e
         return []
     progress_cb(("mode", "determinate"))
     progress_cb(0)
-    chunk_samples = sample_rate * 30
+    chunk_samples = sample_rate * 20
     segments = []
     offset = 0.0
     last_p = 0
