@@ -5,11 +5,11 @@
 - 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
 - 支持中文（默认 `language="zh"`），可切换自动检测
 
-### 字幕长度控制
+## 项目背景 · Motivation
 
-- `max_len`：限制单段字幕的最大字符数。识别结果在进入 `wrapSegment()` 时会按该上限强制切分，超出后拆成多段，避免单条字幕过长。
-- `max_tokens`：限制单段字幕的最大 token 数。解码循环检测到达到 `max_tokens`（或遇到结束 token）时提前结束该段，防止生成超长字幕。
-- 启用词级时间戳且未指定 `max_len` 时，程序会自动将其设为 **40**，进一步控制字幕长度。
+我最初使用 **WhisperDesktop** 作为转写工具，但该项目已长期停止维护，无法很好地兼容最新的 **Whisper v3** 和 **Whisper v3-turbo** 模型。为获得持续升级的体验，我基于 **faster-whisper** 与 **whisper.cpp** 重新实现了这个开源助手。
+
+I initially relied on **WhisperDesktop** for transcription, yet it has not been updated for a long time and fails to work with the latest **Whisper v3** and **Whisper v3-turbo** models. To keep pace with new releases, I built this open-source assistant on top of **faster-whisper** and **whisper.cpp**.
 
 ## 快速开始
 
