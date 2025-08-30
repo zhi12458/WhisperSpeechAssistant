@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import re
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -56,12 +57,50 @@ def format_timestamp(seconds: float) -> str:
     h = total_ms // 3_600_000
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
+
+def wrap_srt_text(text: str, max_chars: int = 30) -> str:
+    """Wrap subtitle text to avoid overly long lines.
+
+    The function tries to keep complete sentences on the same line by
+    splitting on punctuation such as ``。！？!?``. If a single sentence
+    still exceeds ``max_chars``, it will be further broken into chunks,
+    preferring to split on commas or spaces where possible.
+    """
+    sentences = re.split(r"(?<=[。！？!?])", text)
+    lines: list[str] = []
+    current = ""
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(current) + len(s) <= max_chars:
+            current += s
+        else:
+            if current:
+                lines.append(current)
+            while len(s) > max_chars:
+                break_pos = -1
+                for ch in ("，", ",", " ", ";", "；", "、"):
+                    pos = s.rfind(ch, 0, max_chars)
+                    if pos > break_pos:
+                        break_pos = pos + 1
+                if break_pos <= 0:
+                    lines.append(s[:max_chars])
+                    s = s[max_chars:]
+                else:
+                    lines.append(s[:break_pos])
+                    s = s[break_pos:]
+            current = s
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
 def write_srt(segments, outfile: str):
     with open(outfile, "w", encoding="utf-8") as f:
         for idx, seg in enumerate(segments, start=1):
             start = format_timestamp(seg.start)
             end = format_timestamp(seg.end)
-            text = (seg.text or "").strip()
+            text = wrap_srt_text((seg.text or "").strip())
             f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
 
 def write_txt(segments, outfile: str):
