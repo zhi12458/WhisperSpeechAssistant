@@ -307,7 +307,13 @@ def transcribe_with_progress(
             if stop_event and stop_event.is_set():
                 raise TranscriptionStopped()
 
-        model.transcribe(media_path, language=(language or ""), new_segment_callback=cb, print_progress=False)
+        model.transcribe(
+            media_path,
+            language=(language or ""),
+            translate=False,
+            new_segment_callback=cb,
+            print_progress=False,
+        )
         progress_cb(100)
         segments = seg_list
     else:
