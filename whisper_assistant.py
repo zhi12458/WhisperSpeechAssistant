@@ -213,9 +213,19 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
     raise last_err if last_err else RuntimeError("模型加载失败")
 
 
-def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_event):
+def run_full_transcribe(
+    model,
+    media_path,
+    language,
+    logger,
+    progress_cb,
+    stop_event,
+    word_timestamps: bool = False,
+    max_len: int | None = None,
+    max_tokens: int | None = None,
+):
     """
-    Process the entire audio in ~20s windows, accumulating segments.
+    Process the entire audio in ~30s windows, accumulating segments.
     This mimics the "runFull" strategy where the whole file is read
     once and recognition happens on internal chunks that are later
     concatenated.
@@ -227,7 +237,7 @@ def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_e
         return []
     progress_cb(("mode", "determinate"))
     progress_cb(0)
-    chunk_samples = sample_rate * 20
+    chunk_samples = sample_rate * 30
     segments = []
     offset = 0.0
     last_p = 0
@@ -236,12 +246,12 @@ def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_e
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        sub_segments, _ = model.transcribe(
-            audio=chunk,
-            language=language,
-            beam_size=5,
-            word_timestamps=False,
-        )
+        kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
+        if max_len is not None:
+            kwargs["max_len"] = max_len
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
         for seg in sub_segments:
             seg.start = (seg.start or 0.0) + offset
             seg.end = (seg.end or 0.0) + offset
@@ -267,6 +277,9 @@ def transcribe_with_progress(
     progress_cb,
     stop_event=None,
     device_mode: str = "auto",
+    word_timestamps: bool = False,
+    max_len: int | None = None,
+    max_tokens: int | None = None,
 ):
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"未找到文件：{media_path}")
@@ -279,6 +292,9 @@ def transcribe_with_progress(
             messagebox.showwarning("GPU 初始化失败", warn_msg)
         except Exception:
             pass
+    if word_timestamps and max_len is None:
+        max_len = 40
+        logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
     if backend == "ggml":
         logger(f"[INFO] Using ggml backend (device={device})")
         duration = get_media_duration(media_path)
@@ -307,7 +323,14 @@ def transcribe_with_progress(
             if stop_event and stop_event.is_set():
                 raise TranscriptionStopped()
 
-        model.transcribe(media_path, language=(language or ""), new_segment_callback=cb, print_progress=False)
+        kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
+        if word_timestamps:
+            kwargs["word_timestamps"] = True
+        if max_len is not None:
+            kwargs["max_len"] = max_len
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        model.transcribe(media_path, **kwargs)
         progress_cb(100)
         segments = seg_list
     else:
@@ -319,6 +342,9 @@ def transcribe_with_progress(
             logger,
             progress_cb,
             stop_event,
+            word_timestamps=word_timestamps,
+            max_len=max_len,
+            max_tokens=max_tokens,
         )
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
