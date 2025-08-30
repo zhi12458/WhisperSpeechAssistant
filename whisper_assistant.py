@@ -10,6 +10,10 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from dataclasses import dataclass
+
+import numpy as np
+import librosa
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -20,12 +24,47 @@ from faster_whisper import WhisperModel
 # codebase can continue to call ``load_audio`` transparently.
 from faster_whisper.audio import decode_audio as load_audio
 
+# probability threshold for skipping no-speech chunks
+NO_SPEECH_THRESHOLD = 0.6
+
 
 class TranscriptionStopped(Exception):
     """Raised when the transcription is interrupted by the user."""
     pass
 
 APP_TITLE = "Whisper 语音识别助手 (Whisper Speech Transcriber)"
+
+
+@dataclass
+class CaptureParams:
+    """Parameters used to tune audio capture and VAD behaviour."""
+    dropStartSilence: bool = True
+    minDuration: float = 0.5  # seconds
+    pauseDuration: float = 0.8  # seconds
+
+
+def detect_voice(audio: np.ndarray, sample_rate: int = 16000) -> int:
+    """Return 1 if speech is detected, otherwise 0.
+
+    The detection is based on a combination of signal energy,
+    fundamental frequency and spectral flatness.
+    """
+    if audio.size == 0:
+        return 0
+    energy = float(np.sqrt(np.mean(audio ** 2)))
+    if energy < 5e-4:
+        return 0
+    try:
+        f0 = librosa.yin(audio, fmin=50, fmax=500, sr=sample_rate)
+        if np.all(np.isnan(f0)) or np.nanmean(f0) < 80:
+            return 0
+        flat = float(np.mean(librosa.feature.spectral_flatness(y=audio)))
+        if flat > 0.2:
+            return 0
+    except Exception:
+        # If feature extraction fails treat it as silence
+        return 0
+    return 1
 
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
@@ -213,7 +252,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
     raise last_err if last_err else RuntimeError("模型加载失败")
 
 
-def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_event):
+def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_event, capture_params: CaptureParams | None = None):
     """
     Process the entire audio in ~20s windows, accumulating segments.
     This mimics the "runFull" strategy where the whole file is read
@@ -227,21 +266,41 @@ def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_e
         return []
     progress_cb(("mode", "determinate"))
     progress_cb(0)
+    if capture_params is None:
+        capture_params = CaptureParams()
     chunk_samples = sample_rate * 20
     segments = []
     offset = 0.0
     last_p = 0
+    prompt_past = ""
     for start in range(0, total, chunk_samples):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        sub_segments, _ = model.transcribe(
+        # voice activity detection
+        if detect_voice(chunk, sample_rate) == 0:
+            prompt_past = ""
+            if start == 0 and capture_params.dropStartSilence:
+                continue
+            offset += (end - start) / sample_rate
+            logger("[INFO] Skipping silent chunk")
+            continue
+        duration = (end - start) / sample_rate
+        if duration < capture_params.minDuration:
+            prompt_past = ""
+        sub_segments, info = model.transcribe(
             audio=chunk,
             language=language,
             beam_size=5,
             word_timestamps=False,
+            initial_prompt=prompt_past or None,
         )
+        if getattr(info, "no_speech_prob", 0.0) > NO_SPEECH_THRESHOLD:
+            prompt_past = ""
+            offset += duration
+            logger("[INFO] High no-speech probability, skipping chunk output")
+            continue
         for seg in sub_segments:
             seg.start = (seg.start or 0.0) + offset
             seg.end = (seg.end or 0.0) + offset
@@ -249,7 +308,8 @@ def run_full_transcribe(model, media_path, language, logger, progress_cb, stop_e
             logger(
                 f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
             )
-        offset += (end - start) / sample_rate
+            prompt_past += " " + (seg.text or "").strip()
+        offset += duration
         p = int(min(100, (end / total) * 100))
         if p > last_p:
             last_p = p
@@ -319,6 +379,7 @@ def transcribe_with_progress(
             logger,
             progress_cb,
             stop_event,
+            CaptureParams(),
         )
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
