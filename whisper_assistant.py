@@ -27,6 +27,10 @@ class TranscriptionStopped(Exception):
 
 APP_TITLE = "Whisper 语音识别助手 (Whisper Speech Transcriber)"
 
+# Default parameters for optional beam search decoding
+DEFAULT_BEAM_WIDTH = 10
+DEFAULT_N_BEST = 5
+
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
     if shutil.which("ffmpeg"):
@@ -224,6 +228,9 @@ def run_full_transcribe(
     max_len: int | None = None,
     max_tokens: int | None = None,
     use_context: bool = False,
+    beam_search: bool = False,
+    beam_width: int = DEFAULT_BEAM_WIDTH,
+    n_best: int = DEFAULT_N_BEST,
 ):
     """
     Process the entire audio in ~30s windows, accumulating segments.
@@ -249,7 +256,13 @@ def run_full_transcribe(
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
+        kwargs = {"language": language, "word_timestamps": word_timestamps}
+        if beam_search:
+            kwargs["beam_size"] = beam_width
+            kwargs["best_of"] = n_best
+        else:
+            kwargs["beam_size"] = 1
+            kwargs["best_of"] = 1
         if use_context and prev_tokens:
             kwargs["initial_prompt"] = prev_tokens
         if max_len is not None:
@@ -292,6 +305,9 @@ def transcribe_with_progress(
     max_len: int | None = None,
     max_tokens: int | None = None,
     use_context: bool = False,
+    beam_search: bool = False,
+    beam_width: int = DEFAULT_BEAM_WIDTH,
+    n_best: int = DEFAULT_N_BEST,
 ):
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"未找到文件：{media_path}")
@@ -336,6 +352,8 @@ def transcribe_with_progress(
                 raise TranscriptionStopped()
 
         kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
+        if beam_search:
+            kwargs.update({"beam_search": True, "beam_size": beam_width, "best_of": n_best})
         if word_timestamps:
             kwargs["word_timestamps"] = True
         if max_len is not None:
@@ -358,6 +376,9 @@ def transcribe_with_progress(
             max_len=max_len,
             max_tokens=max_tokens,
             use_context=use_context,
+            beam_search=beam_search,
+            beam_width=beam_width,
+            n_best=n_best,
         )
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
@@ -421,6 +442,8 @@ class WhisperApp(tk.Tk):
         self.lang_combo.grid(row=4, column=2, padx=70, sticky="e")
         self.use_context_var = tk.BooleanVar(value=use_context)
         tk.Checkbutton(self, text="使用上下文", variable=self.use_context_var).grid(row=4, column=3, sticky="w")
+        self.beam_search_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="Beam Search", variable=self.beam_search_var).grid(row=4, column=4, sticky="w")
 
         tk.Label(self, text="进度:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
         self.progress = ttk.Progressbar(self, orient="horizontal", length=560, mode="determinate", maximum=100)
@@ -571,6 +594,9 @@ class WhisperApp(tk.Tk):
                     stop_event=self.stop_event,
                     device_mode=device_mode,
                     use_context=self.use_context_var.get(),
+                    beam_search=self.beam_search_var.get(),
+                    beam_width=DEFAULT_BEAM_WIDTH,
+                    n_best=DEFAULT_N_BEST,
                 )
                 self.enqueue(("DONE", True, outfile))
             except TranscriptionStopped:
