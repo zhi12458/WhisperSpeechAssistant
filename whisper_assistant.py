@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import numpy as np
 
 # pip install faster-whisper
 from faster_whisper import WhisperModel
@@ -104,6 +105,17 @@ def get_media_duration(media_path: str) -> float | None:
         return float(out.strip())
     except Exception:
         return None
+
+
+def phase_vocoder_speedup(samples, rate: float = 2.0):
+    """Speed up audio using a phase vocoder while keeping pitch."""
+    try:
+        import librosa  # type: ignore
+    except Exception as e:
+        raise RuntimeError("speed_up requires librosa") from e
+    stft = librosa.stft(samples.astype(np.float32))
+    stretched = librosa.phase_vocoder(stft, rate)
+    return librosa.istft(stretched, length=int(len(samples) / rate)).astype(samples.dtype)
 
 def pick_device_and_compute_type(mode: str = "auto"):
     if mode == "cpu" or os.environ.get("WHISPER_FORCE_CPU") == "1":
@@ -248,17 +260,22 @@ def run_full_transcribe(
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
         if speed_up:
-            kwargs["speed_up"] = True
+            chunk = phase_vocoder_speedup(chunk)
+        kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
         for seg in sub_segments:
-            seg.start = (seg.start or 0.0) + offset
-            seg.end = (seg.end or 0.0) + offset
+            start_v = seg.start or 0.0
+            end_v = seg.end or 0.0
+            if speed_up:
+                start_v *= 2
+                end_v *= 2
+            seg.start = start_v + offset
+            seg.end = end_v + offset
             segments.append(seg)
             logger(
                 f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
@@ -317,6 +334,9 @@ def transcribe_with_progress(
             nonlocal last_p
             seg.start = getattr(seg, "t0", 0) / 100.0
             seg.end = getattr(seg, "t1", 0) / 100.0
+            if speed_up:
+                seg.start *= 2
+                seg.end *= 2
             seg_list.append(seg)
             end_t = seg.end
             if duration and duration > 0:
@@ -330,16 +350,18 @@ def transcribe_with_progress(
             if stop_event and stop_event.is_set():
                 raise TranscriptionStopped()
 
-        kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
+        media_input = media_path
         if speed_up:
-            kwargs["speed_up"] = True
+            media_input = phase_vocoder_speedup(load_audio(media_path))
+
+        kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
         if word_timestamps:
             kwargs["word_timestamps"] = True
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        model.transcribe(media_path, **kwargs)
+        model.transcribe(media_input, **kwargs)
         progress_cb(100)
         segments = seg_list
     else:
