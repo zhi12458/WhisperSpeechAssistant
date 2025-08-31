@@ -128,10 +128,11 @@ _model_cache = {}
 
 def load_model(model_path: str, backend: str, device_mode: str = "auto"):
     warn_msg = None
+    cpu_threads = os.cpu_count() or 4
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
 
-        n_threads = os.cpu_count() or 4
+        n_threads = cpu_threads
         params = {}
         device = "cpu"
         if device_mode == "gpu":
@@ -183,7 +184,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
         if key in _model_cache:
             return _model_cache[key], device, ct, warn_msg
         try:
-            model = WhisperModel(model_path, device=device, compute_type=ct)
+            model = WhisperModel(model_path, device=device, compute_type=ct, cpu_threads=cpu_threads)
             _model_cache[key] = model
             return model, device, ct, warn_msg
         except Exception as e:
@@ -199,14 +200,14 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
             if key in _model_cache:
                 return _model_cache[key], device, ct, warn_msg
             try:
-                model = WhisperModel(model_path, device=device, compute_type=ct)
+                model = WhisperModel(model_path, device=device, compute_type=ct, cpu_threads=cpu_threads)
                 _model_cache[key] = model
                 return model, device, ct, warn_msg
             except Exception as e:
                 last_err = e
     if device_mode == "auto":
         try:
-            model = WhisperModel(model_path, device="cpu", compute_type="float32")
+            model = WhisperModel(model_path, device="cpu", compute_type="float32", cpu_threads=cpu_threads)
             return model, "cpu", "float32", warn_msg
         except Exception:
             raise last_err if last_err else RuntimeError("模型加载失败")
@@ -220,6 +221,7 @@ def run_full_transcribe(
     logger,
     progress_cb,
     stop_event,
+    speed_up: bool = False,
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
@@ -247,6 +249,8 @@ def run_full_transcribe(
             raise TranscriptionStopped()
         chunk = audio[start:end]
         kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
+        if speed_up:
+            kwargs["speed_up"] = True
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
@@ -277,6 +281,7 @@ def transcribe_with_progress(
     progress_cb,
     stop_event=None,
     device_mode: str = "auto",
+    speed_up: bool = False,
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
@@ -292,6 +297,8 @@ def transcribe_with_progress(
             messagebox.showwarning("GPU 初始化失败", warn_msg)
         except Exception:
             pass
+    if speed_up:
+        logger("[INFO] speed_up enabled (phase vocoder 2x)")
     if word_timestamps and max_len is None:
         max_len = 40
         logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
@@ -324,6 +331,8 @@ def transcribe_with_progress(
                 raise TranscriptionStopped()
 
         kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
+        if speed_up:
+            kwargs["speed_up"] = True
         if word_timestamps:
             kwargs["word_timestamps"] = True
         if max_len is not None:
@@ -342,6 +351,7 @@ def transcribe_with_progress(
             logger,
             progress_cb,
             stop_event,
+            speed_up=speed_up,
             word_timestamps=word_timestamps,
             max_len=max_len,
             max_tokens=max_tokens,
@@ -364,7 +374,7 @@ class WhisperApp(tk.Tk):
         # allow widgets to grow/shrink with window resizing
         self.grid_columnconfigure(1, weight=1)
         self.grid_columnconfigure(2, weight=1)
-        self.grid_rowconfigure(7, weight=1)
+        self.grid_rowconfigure(8, weight=1)
         self.msg_queue = queue.Queue()
         self.worker_thread = None
         self.last_output = None
@@ -407,21 +417,25 @@ class WhisperApp(tk.Tk):
         self.lang_combo.set("zh")
         self.lang_combo.grid(row=4, column=2, padx=70, sticky="e")
 
-        tk.Label(self, text="进度:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
+        tk.Label(self, text="加速:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
+        self.speed_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="2× (相位声码器)", variable=self.speed_var).grid(row=5, column=1, sticky="w")
+
+        tk.Label(self, text="进度:").grid(row=6, column=0, sticky="w", padx=12, pady=8)
         self.progress = ttk.Progressbar(self, orient="horizontal", length=560, mode="determinate", maximum=100)
-        self.progress.grid(row=5, column=1, columnspan=2, padx=6, sticky="ew")
+        self.progress.grid(row=6, column=1, columnspan=2, padx=6, sticky="ew")
         self.progress_pct = tk.Label(self, text="0%")
-        self.progress_pct.grid(row=5, column=2, sticky="e", padx=10)
+        self.progress_pct.grid(row=6, column=2, sticky="e", padx=10)
 
         self.start_button = tk.Button(self, text="开始转写", width=12, command=self.on_run)
-        self.start_button.grid(row=6, column=1, pady=6, sticky="e")
+        self.start_button.grid(row=7, column=1, pady=6, sticky="e")
         self.stop_button = tk.Button(self, text="停止", width=12, command=self.on_stop, state="disabled")
-        self.stop_button.grid(row=6, column=0, pady=6, padx=12, sticky="w")
-        tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=6, column=2, pady=6, sticky="w")
+        self.stop_button.grid(row=7, column=0, pady=6, padx=12, sticky="w")
+        tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=7, column=2, pady=6, sticky="w")
 
-        tk.Label(self, text="日志:").grid(row=7, column=0, sticky="nw", padx=12, pady=8)
+        tk.Label(self, text="日志:").grid(row=8, column=0, sticky="nw", padx=12, pady=8)
         self.log_text = tk.Text(self, height=10, width=92, state="disabled")
-        self.log_text.grid(row=7, column=1, columnspan=2, padx=6, pady=6, sticky="nsew")
+        self.log_text.grid(row=8, column=1, columnspan=2, padx=6, pady=6, sticky="nsew")
         self.after(100, self.poll_queue)
 
     def choose_model_path(self):
@@ -533,7 +547,9 @@ class WhisperApp(tk.Tk):
         self.log(f"使用模型：{model_path} (后端：{backend})")
         self.log(f"输出格式：{fmt.upper()}，语言：{lang}")
         device_mode = self.device_var.get()
+        speed_up = self.speed_var.get()
         self.log(f"设备：{device_mode}")
+        self.log(f"speed_up：{speed_up}")
         self.set_running(True)
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
@@ -555,6 +571,7 @@ class WhisperApp(tk.Tk):
                     progress_cb=progress_cb,
                     stop_event=self.stop_event,
                     device_mode=device_mode,
+                    speed_up=speed_up,
                 )
                 self.enqueue(("DONE", True, outfile))
             except TranscriptionStopped:
