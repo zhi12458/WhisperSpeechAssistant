@@ -114,7 +114,8 @@ def phase_vocoder_speedup(samples, rate: float = 2.0):
     except Exception as e:
         raise RuntimeError("speed_up requires librosa") from e
     stft = librosa.stft(samples.astype(np.float32))
-    stretched = librosa.phase_vocoder(stft, rate)
+    # ``rate`` is a keyword-only argument in newer librosa releases
+    stretched = librosa.phase_vocoder(stft, rate=rate)
     return librosa.istft(stretched, length=int(len(samples) / rate)).astype(samples.dtype)
 
 def pick_device_and_compute_type(mode: str = "auto"):
