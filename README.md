@@ -4,6 +4,7 @@
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
 - 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
 - 支持中文（默认 `language="zh"`），可切换自动检测
+- 可选 **Beam Search**（默认 `beam_width=10`, `n_best=5`），通过同时探索多条假设路径提升识别正确率
 
 ## 项目背景 · Motivation
 
@@ -19,6 +20,8 @@ python whisper_assistant.py
 ```
 
 依赖中已包含 `pywhispercpp` 以支持 ggml 模型。界面中可在 **CTranslate2** 与 **ggml** 两种后端之间切换，选择 ggml 时需要指定 `.bin`/`.gguf` 模型文件。
+
+界面中勾选 **Beam Search** 可同时探索多条假设路径，从而提升识别准确率。
 
 > Windows 用户可将 `ffmpeg.exe` 放在程序目录（与 `whisper_assistant.py` 同级）或确保其已在系统 PATH 中；Linux 用户通过系统包管理器安装 `ffmpeg`。
 
