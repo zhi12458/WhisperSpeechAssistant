@@ -223,6 +223,7 @@ def run_full_transcribe(
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
+    use_context: bool = False,
 ):
     """
     Process the entire audio in ~30s windows, accumulating segments.
@@ -241,17 +242,22 @@ def run_full_transcribe(
     segments = []
     offset = 0.0
     last_p = 0
+    prev_tokens = None
+    token_history = []
     for start in range(0, total, chunk_samples):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
         kwargs = {"language": language, "beam_size": 5, "word_timestamps": word_timestamps}
+        if use_context and prev_tokens:
+            kwargs["initial_prompt"] = prev_tokens
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
+        current_tokens = []
         for seg in sub_segments:
             seg.start = (seg.start or 0.0) + offset
             seg.end = (seg.end or 0.0) + offset
@@ -259,13 +265,18 @@ def run_full_transcribe(
             logger(
                 f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
             )
+            if use_context:
+                current_tokens.extend(seg.tokens)
+        if use_context:
+            token_history.append(current_tokens)
+            prev_tokens = current_tokens
         offset += (end - start) / sample_rate
         p = int(min(100, (end / total) * 100))
         if p > last_p:
             last_p = p
             progress_cb(p)
     progress_cb(100)
-    return segments
+    return segments, token_history
 
 def transcribe_with_progress(
     model_path: str,
@@ -280,6 +291,7 @@ def transcribe_with_progress(
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
+    use_context: bool = False,
 ):
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"未找到文件：{media_path}")
@@ -335,7 +347,7 @@ def transcribe_with_progress(
         segments = seg_list
     else:
         logger(f"[INFO] Using device={device}, compute_type={compute_type}")
-        segments = run_full_transcribe(
+        segments, _ = run_full_transcribe(
             model,
             media_path,
             language,
@@ -345,6 +357,7 @@ def transcribe_with_progress(
             word_timestamps=word_timestamps,
             max_len=max_len,
             max_tokens=max_tokens,
+            use_context=use_context,
         )
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
@@ -355,7 +368,7 @@ def transcribe_with_progress(
     return outfile
 
 class WhisperApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, use_context: bool = False):
         super().__init__()
         self.title(APP_TITLE)
         # slightly taller default window and allow resizing so controls stay visible
@@ -406,6 +419,8 @@ class WhisperApp(tk.Tk):
         self.lang_combo = ttk.Combobox(self, values=["zh", "auto"], width=8, state="readonly")
         self.lang_combo.set("zh")
         self.lang_combo.grid(row=4, column=2, padx=70, sticky="e")
+        self.use_context_var = tk.BooleanVar(value=use_context)
+        tk.Checkbutton(self, text="使用上下文", variable=self.use_context_var).grid(row=4, column=3, sticky="w")
 
         tk.Label(self, text="进度:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
         self.progress = ttk.Progressbar(self, orient="horizontal", length=560, mode="determinate", maximum=100)
@@ -555,6 +570,7 @@ class WhisperApp(tk.Tk):
                     progress_cb=progress_cb,
                     stop_event=self.stop_event,
                     device_mode=device_mode,
+                    use_context=self.use_context_var.get(),
                 )
                 self.enqueue(("DONE", True, outfile))
             except TranscriptionStopped:
@@ -567,4 +583,9 @@ class WhisperApp(tk.Tk):
         self.worker_thread.start()
 
 if __name__ == "__main__":
-    WhisperApp().mainloop()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--use-context", action="store_true", help="启用跨块上下文提示")
+    args = parser.parse_args()
+    WhisperApp(use_context=args.use_context).mainloop()
