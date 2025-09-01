@@ -243,33 +243,6 @@ def load_model(
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
 
-    if compute_type:
-        attempts = [(device, first_ct)]
-        if device == "cuda" and device_mode != "gpu":
-            attempts.append(("cpu", first_ct))
-        last_err = None
-        for dev, ct in attempts:
-            key = (model_path, dev, ct)
-            if key in _model_cache:
-                if dev != device:
-                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
-                return _model_cache[key], dev, ct, warn_msg, None
-            try:
-                model = WhisperModel(model_path, device=dev, compute_type=ct)
-                _model_cache[key] = model
-                if dev != device:
-                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
-                return model, dev, ct, warn_msg, None
-            except Exception as e:
-                last_err = e
-                if dev == "cuda" and device_mode != "gpu":
-                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
-                    continue
-                raise RuntimeError(
-                    f"Requested compute_type={ct} but backend raised: {e}"
-                ) from e
-        raise last_err if last_err else RuntimeError("模型加载失败")
-
     fallbacks = [first_ct]
     if device == "cuda":
         for ct in ["float16", "float32", "int8"]:
