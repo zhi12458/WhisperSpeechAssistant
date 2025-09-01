@@ -170,6 +170,31 @@ def pick_device_and_compute_type(mode: str = "auto"):
 
 _model_cache = {}
 
+
+def guess_model_precision(model_path: str) -> str | None:
+    """Best-effort detection of a CTranslate2 model's quantization."""
+    config_path = os.path.join(model_path, "config.json")
+    try:
+        if os.path.isfile(config_path):
+            import json
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            for key in ("quantization", "dtype", "type"):
+                val = cfg.get(key) or cfg.get("model", {}).get(key)
+                if isinstance(val, str):
+                    val = val.lower()
+                    for ct in ("int8", "int16", "int32", "float16", "float32"):
+                        if ct in val:
+                            return ct
+    except Exception:
+        pass
+    lower = os.path.basename(model_path).lower()
+    for ct in ("int8", "int16", "int32", "float16", "float32"):
+        if ct in lower:
+            return ct
+    return None
+
 def load_model(
     model_path: str,
     backend: str,
@@ -221,8 +246,13 @@ def load_model(
         _model_cache[key] = model
         return model, device, "ggml", warn_msg, None
     device, first_ct = pick_device_and_compute_type(device_mode)
+    model_ct = None
+    if backend != "ggml":
+        model_ct = guess_model_precision(model_path)
     if compute_type:
         first_ct = compute_type
+    elif model_ct:
+        first_ct = model_ct
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
     if device == "cuda":
@@ -380,6 +410,7 @@ def transcribe_with_progress(
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
         backend = "ggml"
+    model_prec = None if backend == "ggml" else guess_model_precision(model_path)
     requested_ct = compute_type
     model, device, compute_type, warn_msg, ct_warn = load_model(
         model_path, backend, device_mode=device_mode, compute_type=requested_ct
@@ -388,6 +419,8 @@ def transcribe_with_progress(
         msg = f"Requested compute_type={requested_ct} but using {compute_type}"
         if ct_warn:
             msg += f": {ct_warn}"
+        elif model_prec:
+            msg += f" (model quantized to {model_prec})"
         logger(f"[WARN] {msg}")
     if warn_msg:
         logger(f"[WARN] {warn_msg}")
