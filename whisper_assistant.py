@@ -289,8 +289,10 @@ def run_full_transcribe(
     segments = []
     offset = 0.0
     last_p = 0
-    prev_tokens = None
     token_history = []
+    prev_tokens: list[int] = []
+    n_max_text_ctx = getattr(model, "max_length", 0)
+    max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
     for start in range(0, total, chunk_samples):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
@@ -304,7 +306,10 @@ def run_full_transcribe(
             kwargs["beam_size"] = 1
             kwargs["best_of"] = DEFAULT_TOP_K
         if use_context and prev_tokens:
-            kwargs["initial_prompt"] = prev_tokens
+            if max_prompt_tokens:
+                kwargs["initial_prompt"] = prev_tokens[-max_prompt_tokens:]
+            else:
+                kwargs["initial_prompt"] = prev_tokens
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
@@ -321,8 +326,10 @@ def run_full_transcribe(
             if use_context:
                 current_tokens.extend(seg.tokens)
         if use_context:
+            prev_tokens.extend(current_tokens)
+            if max_prompt_tokens and len(prev_tokens) > max_prompt_tokens:
+                prev_tokens = prev_tokens[-max_prompt_tokens:]
             token_history.append(current_tokens)
-            prev_tokens = current_tokens
         offset += (end - start) / sample_rate
         p = int(min(100, (end / total) * 100))
         if p > last_p:
