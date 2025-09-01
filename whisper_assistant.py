@@ -374,9 +374,12 @@ def transcribe_with_progress(
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
         backend = "ggml"
+    requested_ct = compute_type
     model, device, compute_type, warn_msg = load_model(
-        model_path, backend, device_mode=device_mode, compute_type=compute_type
+        model_path, backend, device_mode=device_mode, compute_type=requested_ct
     )
+    if requested_ct and requested_ct != compute_type:
+        logger(f"[WARN] Requested compute_type={requested_ct} but using {compute_type}")
     if warn_msg:
         logger(f"[WARN] {warn_msg}")
         try:
@@ -564,13 +567,17 @@ class WhisperApp(tk.Tk):
     def on_device_change(self, event=None):
         device = self.device_var.get()
         if device == "cpu":
-            self.compute_type_combo["values"] = ["int8", "int16", "int32"]
+            vals = ["int8", "int16", "int32"]
+            self.compute_type_combo["values"] = vals
             self.compute_type_combo.config(state="readonly")
             self.compute_type_combo.current(0)
+            self.compute_type_var.set(vals[0])
         elif device == "gpu":
-            self.compute_type_combo["values"] = ["float16", "float32"]
+            vals = ["float16", "float32"]
+            self.compute_type_combo["values"] = vals
             self.compute_type_combo.config(state="readonly")
             self.compute_type_combo.current(0)
+            self.compute_type_var.set(vals[0])
         else:
             self.compute_type_var.set("")
             self.compute_type_combo["values"] = []
@@ -671,9 +678,11 @@ class WhisperApp(tk.Tk):
         self.log(f"输出格式：{fmt.upper()}，语言：{lang}")
         device_mode = self.device_var.get()
         self.log(f"设备：{device_mode}")
-        compute_type = self.compute_type_var.get() if self.compute_type_combo["state"] == "readonly" else None
+        compute_type = self.compute_type_var.get().strip()
         if compute_type:
             self.log(f"精度：{compute_type}")
+        else:
+            compute_type = None
         self.set_running(True)
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
