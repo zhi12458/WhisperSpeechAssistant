@@ -218,9 +218,12 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
     if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+        fallbacks = [first_ct, "int8_float16", "float32", "int8"]
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        fallbacks = [first_ct]
+        for ct in ["int8", "int16", "float32", "float16"]:
+            if ct != first_ct:
+                fallbacks.append(ct)
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
@@ -238,7 +241,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
         warn_msg = "GPU 初始化失败，已切回 CPU 模式"
         device = "cpu"
         last_err = None
-        for ct in ["int16", "float32", "float16"]:
+        for ct in ["int8", "int16", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
                 return _model_cache[key], device, ct, warn_msg
