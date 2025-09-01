@@ -30,6 +30,46 @@ APP_TITLE = "Whisper 语音识别助手 (Whisper Speech Transcriber)"
 # Default parameters for optional beam search decoding
 DEFAULT_BEAM_WIDTH = 10
 DEFAULT_N_BEST = 5
+DEFAULT_TOP_K = 4
+TS_PROB_THRESHOLD = 0.01
+TS_PROB_SUM_THRESHOLD = 0.01
+
+
+def sample_best(
+    logits,
+    timestamp_mask,
+    top_k: int = DEFAULT_TOP_K,
+    thold_pt: float = TS_PROB_THRESHOLD,
+    thold_ptsum: float = TS_PROB_SUM_THRESHOLD,
+):
+    """Select a token using timestamp filtering and Top-k sampling.
+
+    This helper performs a timestamp probability check on ``logits`` before
+    choosing the final token from the ``top_k`` highest probability
+    candidates.  The approach mirrors the ``sampleBest`` strategy in
+    whisper.cpp and helps avoid returning extremely low-probability words.
+
+    Args:
+        logits: Sequence of raw logits for all tokens.
+        timestamp_mask: Boolean mask indicating timestamp token positions.
+        top_k: Number of candidate tokens to consider (default 4).
+        thold_pt: Minimum individual timestamp token probability.
+        thold_ptsum: Minimum combined timestamp token probability.
+
+    Returns:
+        The index of the selected token.
+    """
+
+    import numpy as np
+
+    probs = np.exp(logits - np.max(logits))
+    ts_probs = probs[timestamp_mask]
+    ts_max = ts_probs.max() if ts_probs.size > 0 else 0.0
+    if ts_max < thold_pt or ts_probs.sum() < thold_ptsum:
+        probs[timestamp_mask] = 0.0
+    top_indices = np.argsort(probs)[-top_k:]
+    best_idx = top_indices[np.argmax(probs[top_indices])]
+    return int(best_idx)
 
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
@@ -262,7 +302,7 @@ def run_full_transcribe(
             kwargs["best_of"] = n_best
         else:
             kwargs["beam_size"] = 1
-            kwargs["best_of"] = 1
+            kwargs["best_of"] = DEFAULT_TOP_K
         if use_context and prev_tokens:
             kwargs["initial_prompt"] = prev_tokens
         if max_len is not None:
@@ -351,9 +391,16 @@ def transcribe_with_progress(
             if stop_event and stop_event.is_set():
                 raise TranscriptionStopped()
 
-        kwargs = {"language": (language or ""), "new_segment_callback": cb, "print_progress": False}
+        kwargs = {
+            "language": (language or ""),
+            "new_segment_callback": cb,
+            "print_progress": False,
+            "greedy": {"best_of": DEFAULT_TOP_K},
+            "thold_pt": TS_PROB_THRESHOLD,
+            "thold_ptsum": TS_PROB_SUM_THRESHOLD,
+        }
         if beam_search:
-            kwargs.update({"beam_search": True, "beam_size": beam_width, "best_of": n_best})
+            kwargs["beam_search"] = {"beam_size": beam_width, "patience": -1.0}
         if word_timestamps:
             kwargs["word_timestamps"] = True
         if max_len is not None:
