@@ -445,7 +445,8 @@ class WhisperApp(tk.Tk):
         # allow widgets to grow/shrink with window resizing
         self.grid_columnconfigure(1, weight=1)
         self.grid_columnconfigure(2, weight=1)
-        self.grid_rowconfigure(7, weight=1)
+        self.grid_columnconfigure(3, weight=1)
+        self.grid_rowconfigure(8, weight=1)
         self.msg_queue = queue.Queue()
         self.worker_thread = None
         self.last_output = None
@@ -483,30 +484,31 @@ class WhisperApp(tk.Tk):
         self.output_fmt = tk.StringVar(value="srt")
         tk.Radiobutton(self, text="SRT", variable=self.output_fmt, value="srt").grid(row=4, column=1, sticky="w")
         tk.Radiobutton(self, text="TXT", variable=self.output_fmt, value="txt").grid(row=4, column=1)
-        tk.Label(self, text="识别语言:").grid(row=4, column=2, sticky="w")
+        self.use_context_var = tk.BooleanVar(value=use_context)
+        tk.Checkbutton(self, text="使用上下文", variable=self.use_context_var).grid(row=4, column=2, sticky="w", padx=6)
+        self.beam_search_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="Beam Search", variable=self.beam_search_var).grid(row=4, column=3, sticky="w", padx=6)
+
+        tk.Label(self, text="识别语言:").grid(row=5, column=0, sticky="w", padx=12)
         self.lang_combo = ttk.Combobox(self, values=["zh", "auto"], width=8, state="readonly")
         self.lang_combo.set("zh")
-        self.lang_combo.grid(row=4, column=2, padx=70, sticky="e")
-        self.use_context_var = tk.BooleanVar(value=use_context)
-        tk.Checkbutton(self, text="使用上下文", variable=self.use_context_var).grid(row=4, column=3, sticky="w")
-        self.beam_search_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(self, text="Beam Search", variable=self.beam_search_var).grid(row=4, column=4, sticky="w")
+        self.lang_combo.grid(row=5, column=1, sticky="w", padx=6)
 
-        tk.Label(self, text="进度:").grid(row=5, column=0, sticky="w", padx=12, pady=8)
+        tk.Label(self, text="进度:").grid(row=6, column=0, sticky="w", padx=12, pady=8)
         self.progress = ttk.Progressbar(self, orient="horizontal", length=560, mode="determinate", maximum=100)
-        self.progress.grid(row=5, column=1, columnspan=2, padx=6, sticky="ew")
+        self.progress.grid(row=6, column=1, columnspan=3, padx=6, sticky="ew")
         self.progress_pct = tk.Label(self, text="0%")
-        self.progress_pct.grid(row=5, column=2, sticky="e", padx=10)
+        self.progress_pct.grid(row=6, column=3, sticky="e", padx=10)
 
         self.start_button = tk.Button(self, text="开始转写", width=12, command=self.on_run)
-        self.start_button.grid(row=6, column=1, pady=6, sticky="e")
+        self.start_button.grid(row=7, column=1, pady=6, sticky="e")
         self.stop_button = tk.Button(self, text="停止", width=12, command=self.on_stop, state="disabled")
-        self.stop_button.grid(row=6, column=0, pady=6, padx=12, sticky="w")
-        tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=6, column=2, pady=6, sticky="w")
+        self.stop_button.grid(row=7, column=0, pady=6, padx=12, sticky="w")
+        tk.Button(self, text="打开输出所在文件夹", width=18, command=self.on_open_folder).grid(row=7, column=2, pady=6, sticky="w")
 
-        tk.Label(self, text="日志:").grid(row=7, column=0, sticky="nw", padx=12, pady=8)
+        tk.Label(self, text="日志:").grid(row=8, column=0, sticky="nw", padx=12, pady=8)
         self.log_text = tk.Text(self, height=10, width=92, state="disabled")
-        self.log_text.grid(row=7, column=1, columnspan=2, padx=6, pady=6, sticky="nsew")
+        self.log_text.grid(row=8, column=1, columnspan=3, padx=6, pady=6, sticky="nsew")
         self.after(100, self.poll_queue)
 
     def choose_model_path(self):
