@@ -177,6 +177,7 @@ def load_model(
     compute_type: str | None = None,
 ):
     warn_msg = None
+    ct_warn = None
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
 
@@ -203,7 +204,7 @@ def load_model(
                 pass
         key = ("ggml", model_path, device)
         if key in _model_cache:
-            return _model_cache[key], device, "ggml", warn_msg
+            return _model_cache[key], device, "ggml", warn_msg, None
         try:
             model = Model(model_path, n_threads=n_threads, **params)
         except Exception:
@@ -218,7 +219,7 @@ def load_model(
             else:
                 raise
         _model_cache[key] = model
-        return model, device, "ggml", warn_msg
+        return model, device, "ggml", warn_msg, None
     device, first_ct = pick_device_and_compute_type(device_mode)
     if compute_type:
         first_ct = compute_type
@@ -238,33 +239,38 @@ def load_model(
     for ct in fallbacks:
         key = (model_path, device, ct)
         if key in _model_cache:
-            return _model_cache[key], device, ct, warn_msg
+            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
         try:
             model = WhisperModel(model_path, device=device, compute_type=ct)
             _model_cache[key] = model
-            return model, device, ct, warn_msg
+            return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
         except Exception as e:
             last_err = e
+            if ct == first_ct:
+                ct_warn = str(e)
     if device == "cuda":
         if device_mode == "gpu":
             raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
         warn_msg = "GPU 初始化失败，已切回 CPU 模式"
         device = "cpu"
         last_err = None
+        ct_warn = None
         for ct in ["int8", "int16", "int32", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
-                return _model_cache[key], device, ct, warn_msg
+                return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
             try:
                 model = WhisperModel(model_path, device=device, compute_type=ct)
                 _model_cache[key] = model
-                return model, device, ct, warn_msg
+                return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
             except Exception as e:
                 last_err = e
+                if ct == first_ct:
+                    ct_warn = str(e)
     if device_mode == "auto":
         try:
             model = WhisperModel(model_path, device="cpu", compute_type="float32")
-            return model, "cpu", "float32", warn_msg
+            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_warn)
         except Exception:
             raise last_err if last_err else RuntimeError("模型加载失败")
     raise last_err if last_err else RuntimeError("模型加载失败")
@@ -375,11 +381,14 @@ def transcribe_with_progress(
     if is_ggml_model(model_path):
         backend = "ggml"
     requested_ct = compute_type
-    model, device, compute_type, warn_msg = load_model(
+    model, device, compute_type, warn_msg, ct_warn = load_model(
         model_path, backend, device_mode=device_mode, compute_type=requested_ct
     )
     if requested_ct and requested_ct != compute_type:
-        logger(f"[WARN] Requested compute_type={requested_ct} but using {compute_type}")
+        msg = f"Requested compute_type={requested_ct} but using {compute_type}"
+        if ct_warn:
+            msg += f": {ct_warn}"
+        logger(f"[WARN] {msg}")
     if warn_msg:
         logger(f"[WARN] {warn_msg}")
         try:
