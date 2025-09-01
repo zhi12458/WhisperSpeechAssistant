@@ -189,7 +189,10 @@ def guess_model_precision(model_path: str) -> str | None:
                             return ct
     except Exception:
         pass
-    lower = os.path.basename(model_path).lower()
+    # ``os.path.basename`` returns an empty string when ``model_path`` ends with
+    # a path separator.  Normalize first so trailing ``/`` or ``\\`` don't hide
+    # the directory name (which often embeds the precision, e.g. ``ct2int8``).
+    lower = os.path.basename(os.path.normpath(model_path)).lower()
     for ct in ("int8", "int16", "int32", "float16", "float32"):
         if ct in lower:
             return ct
@@ -417,8 +420,11 @@ def transcribe_with_progress(
     )
     if requested_ct and requested_ct != compute_type:
         msg = f"Requested compute_type={requested_ct} but using {compute_type}"
-        if ct_warn:
-            msg += f": {ct_warn}"
+        if ct_warn is not None:
+            if str(ct_warn).strip():
+                msg += f": {ct_warn}"
+            else:
+                msg += ": requested precision not supported by backend"
         elif model_prec:
             msg += f" (model quantized to {model_prec})"
         logger(f"[WARN] {msg}")
