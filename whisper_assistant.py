@@ -151,7 +151,7 @@ def get_media_duration(media_path: str) -> float | None:
 
 def pick_device_and_compute_type(mode: str = "auto"):
     if mode == "cpu" or os.environ.get("WHISPER_FORCE_CPU") == "1":
-        return "cpu", "int8"
+        return "cpu", "int16"
     if mode in ("gpu", "auto"):
         try:
             import ctranslate2 as c2  # type: ignore
@@ -166,7 +166,7 @@ def pick_device_and_compute_type(mode: str = "auto"):
                 return "cuda", "float16"
         except Exception:
             pass
-    return "cpu", "int8"
+    return "cpu", "int16"
 
 _model_cache = {}
 
@@ -218,9 +218,9 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
     if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+        fallbacks = [first_ct, "float32", "int16"]
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        fallbacks = [first_ct, "float32", "float16"]
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
@@ -458,7 +458,7 @@ class WhisperApp(tk.Tk):
         self.worker_thread = None
         self.last_output = None
         exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-        default_model_dir = os.path.join(exe_dir, "models", "belle-whisper-large-v3-turbo-ct2-i8f16")
+        default_model_dir = os.path.join(exe_dir, "models", "belle-whisper-large-v3-turbo-ct2-int16")
         tk.Label(self, text="后端:").grid(row=0, column=0, sticky="w", padx=12, pady=8)
         self.backend_var = tk.StringVar(value="ct2")
         tk.Radiobutton(self, text="CTranslate2", variable=self.backend_var, value="ct2").grid(row=0, column=1, sticky="w")

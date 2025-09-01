@@ -39,11 +39,11 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 > Windows 11 原生环境目前仅提供 CPU 版本的 `ctranslate2`，如需 GPU 加速建议在 [WSL2](https://learn.microsoft.com/windows/wsl/) 中安装以上依赖；若仅在 Windows 上运行，可忽略 GPU 依赖。
 
 ### 模型放置
-- **CTranslate2**：将转换好的模型目录命名为 `belle-whisper-large-v3-turbo-ct2i8f16` 并放在 `models/` 子目录（默认从该目录加载），或在界面中手动选择目录。
+ - **CTranslate2**：将转换好的模型目录命名为 `belle-whisper-large-v3-turbo-ct2-int16` 并放在 `models/` 子目录（默认从该目录加载），或在界面中手动选择目录。
 - **ggml**：下载 `ggml`/`gguf` 模型文件（例如 `ggml-base.bin`），在界面中直接选择该文件即可。
 
 ### CUDA（可选）
-- 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int8`）。
+ - 有 NVIDIA 显卡并安装 **CUDA 12.x + cuDNN 8** 时，程序会自动使用 GPU（`device=cuda, compute_type=float16`），否则回退到 CPU（`int16`）。
 - ggml 后端若在安装 `pywhispercpp` 时启用了 `GGML_CUDA=1`，同样会自动尝试使用 GPU。
 
 ## 打包为 exe（Windows）
@@ -74,7 +74,7 @@ WhisperSpeechAssistant/
 ├─ README.md
 ├─ LICENSE
 └─ models/
-   ├─ belle-whisper-large-v3-turbo-ct2i8f16/  # CTranslate2 模型目录
+    ├─ belle-whisper-large-v3-turbo-ct2-int16/  # CTranslate2 模型目录
    │   └─ ...
    └─ ggml-base.bin                           # ggml 模型文件示例
 ```
