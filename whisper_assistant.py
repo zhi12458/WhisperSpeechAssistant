@@ -236,23 +236,46 @@ def load_model(
                 raise
         _model_cache[key] = model
         return model, device, "ggml", warn_msg, None
-    device, first_ct = pick_device_and_compute_type(device_mode)
-    model_ct = None
-    if backend != "ggml":
-        model_ct = guess_model_precision(model_path)
-    if compute_type:
-        first_ct = compute_type
-    elif model_ct:
-        first_ct = model_ct
+    device, default_ct = pick_device_and_compute_type(device_mode)
+    model_ct = None if backend == "ggml" else guess_model_precision(model_path)
+    first_ct = compute_type or model_ct or default_ct
+
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+
+    if compute_type:
+        attempts = [(device, first_ct)]
+        if device == "cuda" and device_mode != "gpu":
+            attempts.append(("cpu", first_ct))
+        last_err = None
+        for dev, ct in attempts:
+            key = (model_path, dev, ct)
+            if key in _model_cache:
+                if dev != device:
+                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                return _model_cache[key], dev, ct, warn_msg, None
+            try:
+                model = WhisperModel(model_path, device=dev, compute_type=ct)
+                _model_cache[key] = model
+                if dev != device:
+                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                return model, dev, ct, warn_msg, None
+            except Exception as e:
+                last_err = e
+                if dev == "cuda" and device_mode != "gpu":
+                    warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+                    continue
+                raise RuntimeError(
+                    f"Requested compute_type={ct} but backend raised: {e}"
+                ) from e
+        raise last_err if last_err else RuntimeError("模型加载失败")
+
+    fallbacks = [first_ct]
     if device == "cuda":
-        fallbacks = [first_ct]
         for ct in ["float16", "float32", "int8"]:
             if ct not in fallbacks:
                 fallbacks.append(ct)
     else:
-        fallbacks = [first_ct]
         for ct in ["int8", "int16", "int32", "float32", "float16"]:
             if ct not in fallbacks:
                 fallbacks.append(ct)
@@ -415,6 +438,13 @@ def transcribe_with_progress(
                 msg += ": requested precision not supported by backend"
         elif model_prec:
             msg += f" (model quantized to {model_prec})"
+        logger(f"[WARN] {msg}")
+    elif ct_warn is not None and model_prec and model_prec != compute_type:
+        msg = f"Model quantized to {model_prec} but using {compute_type}"
+        if str(ct_warn).strip():
+            msg += f": {ct_warn}"
+        else:
+            msg += ": requested precision not supported by backend"
         logger(f"[WARN] {msg}")
     if warn_msg:
         logger(f"[WARN] {warn_msg}")
