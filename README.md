@@ -2,7 +2,10 @@
 
 基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
-- 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
+- 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；
+  若强制选择 GPU 但初始化失败会提示并停止，建议改用 **CPU**
+- 选择 **CPU** 设备时，可在旁边选择 **int8/int16/int32** 精度（默认 int8）；
+  选择 **GPU** 时，可选 **float16/float32**（默认 float16）；**auto** 模式下该选项不可用
 - 支持中文（默认 `language="zh"`），可切换自动检测
 - 可选 **Beam Search**（默认 `beam_width=10`, `n_best=5`），通过同时探索多条假设路径提升识别正确率
 

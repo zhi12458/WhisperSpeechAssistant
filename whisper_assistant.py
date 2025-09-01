@@ -170,7 +170,12 @@ def pick_device_and_compute_type(mode: str = "auto"):
 
 _model_cache = {}
 
-def load_model(model_path: str, backend: str, device_mode: str = "auto"):
+def load_model(
+    model_path: str,
+    backend: str,
+    device_mode: str = "auto",
+    compute_type: str | None = None,
+):
     warn_msg = None
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
@@ -215,12 +220,20 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
         _model_cache[key] = model
         return model, device, "ggml", warn_msg
     device, first_ct = pick_device_and_compute_type(device_mode)
+    if compute_type:
+        first_ct = compute_type
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
     if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+        fallbacks = [first_ct]
+        for ct in ["float16", "float32", "int8"]:
+            if ct not in fallbacks:
+                fallbacks.append(ct)
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        fallbacks = [first_ct]
+        for ct in ["int8", "int16", "int32", "float32", "float16"]:
+            if ct not in fallbacks:
+                fallbacks.append(ct)
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
@@ -238,7 +251,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
         warn_msg = "GPU 初始化失败，已切回 CPU 模式"
         device = "cpu"
         last_err = None
-        for ct in ["int16", "float32", "float16"]:
+        for ct in ["int8", "int16", "int32", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
                 return _model_cache[key], device, ct, warn_msg
@@ -348,6 +361,7 @@ def transcribe_with_progress(
     progress_cb,
     stop_event=None,
     device_mode: str = "auto",
+    compute_type: str | None = None,
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
@@ -360,7 +374,9 @@ def transcribe_with_progress(
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
         backend = "ggml"
-    model, device, compute_type, warn_msg = load_model(model_path, backend, device_mode=device_mode)
+    model, device, compute_type, warn_msg = load_model(
+        model_path, backend, device_mode=device_mode, compute_type=compute_type
+    )
     if warn_msg:
         logger(f"[WARN] {warn_msg}")
         try:
@@ -475,6 +491,18 @@ class WhisperApp(tk.Tk):
         )
         self.device_combo.current(0)
         self.device_combo.grid(row=1, column=1, sticky="w")
+        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
+
+        tk.Label(self, text="精度:").grid(row=1, column=2, sticky="w", padx=12)
+        self.compute_type_var = tk.StringVar()
+        self.compute_type_combo = ttk.Combobox(
+            self,
+            textvariable=self.compute_type_var,
+            width=8,
+            state="disabled",
+        )
+        self.compute_type_combo.grid(row=1, column=3, sticky="w")
+        self.on_device_change()
 
         tk.Label(self, text="模型路径:").grid(row=2, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
@@ -532,6 +560,21 @@ class WhisperApp(tk.Tk):
         if path:
             self.media_entry.delete(0, tk.END)
             self.media_entry.insert(0, path)
+
+    def on_device_change(self, event=None):
+        device = self.device_var.get()
+        if device == "cpu":
+            self.compute_type_combo["values"] = ["int8", "int16", "int32"]
+            self.compute_type_combo.config(state="readonly")
+            self.compute_type_combo.current(0)
+        elif device == "gpu":
+            self.compute_type_combo["values"] = ["float16", "float32"]
+            self.compute_type_combo.config(state="readonly")
+            self.compute_type_combo.current(0)
+        else:
+            self.compute_type_var.set("")
+            self.compute_type_combo["values"] = []
+            self.compute_type_combo.config(state="disabled")
 
     def log(self, text: str):
         self.log_text.config(state="normal")
@@ -628,6 +671,9 @@ class WhisperApp(tk.Tk):
         self.log(f"输出格式：{fmt.upper()}，语言：{lang}")
         device_mode = self.device_var.get()
         self.log(f"设备：{device_mode}")
+        compute_type = self.compute_type_var.get() if self.compute_type_combo["state"] == "readonly" else None
+        if compute_type:
+            self.log(f"精度：{compute_type}")
         self.set_running(True)
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
@@ -649,6 +695,7 @@ class WhisperApp(tk.Tk):
                     progress_cb=progress_cb,
                     stop_event=self.stop_event,
                     device_mode=device_mode,
+                    compute_type=compute_type,
                     use_context=self.use_context_var.get(),
                     beam_search=self.beam_search_var.get(),
                     beam_width=DEFAULT_BEAM_WIDTH,
