@@ -172,23 +172,11 @@ _model_cache = {}
 
 
 def guess_model_precision(model_path: str) -> str | None:
-    """Best-effort detection of a CTranslate2 model's quantization."""
-    config_path = os.path.join(model_path, "config.json")
-    try:
-        if os.path.isfile(config_path):
-            import json
+    """Best-effort detection of a CTranslate2 model's quantization.
 
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            for key in ("quantization", "dtype", "type"):
-                val = cfg.get(key) or cfg.get("model", {}).get(key)
-                if isinstance(val, str):
-                    val = val.lower()
-                    for ct in ("int8", "int16", "int32", "float16", "float32"):
-                        if ct in val:
-                            return ct
-    except Exception:
-        pass
+    ``config.json`` does not record the quantization of converted models, so the
+    detection relies solely on the directory name (e.g. ``ct2int8``/``ct2int16``).
+    """
     # ``os.path.basename`` returns an empty string when ``model_path`` ends with
     # a path separator.  Normalize first so trailing ``/`` or ``\\`` don't hide
     # the directory name (which often embeds the precision, e.g. ``ct2int8``).
