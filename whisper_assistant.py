@@ -215,7 +215,7 @@ def load_model(
     compute_type: str | None = None,
 ):
     warn_msg = None
-    ct_warn = None
+    ct_err = None
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
 
@@ -324,38 +324,54 @@ def load_model(
     for ct in fallbacks:
         key = (model_path, device, ct)
         if key in _model_cache:
-            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_err)
         try:
             model = WhisperModel(model_path, device=device, compute_type=ct)
             _model_cache[key] = model
-            return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+            return model, device, ct, warn_msg, (None if ct == first_ct else ct_err)
         except Exception as e:
             last_err = e
             if ct == first_ct:
-                ct_warn = str(e)
+                ct_err = str(e)
     if device == "cuda":
         if device_mode == "gpu":
             raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
-        warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+        if ct_err:
+            lower = ct_err.lower()
+            if (
+                "out of memory" in lower
+                or "insufficient memory" in lower
+                or "failed to allocate" in lower
+                or "do not support efficient float16" in lower
+            ):
+                warn_msg = "显存不足，已切回 CPU + int8 模式"
+                ct_err = (
+                    "CUDA 显存不足"
+                    if "do not support efficient float16" in lower
+                    else ct_err
+                )
+            else:
+                warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
+        else:
+            warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
         device = "cpu"
         last_err = None
-        ct_warn = None
         for ct in ["int8", "int16", "int32", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
-                return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+                return _model_cache[key], device, ct, warn_msg, ct_err
             try:
                 model = WhisperModel(model_path, device=device, compute_type=ct)
                 _model_cache[key] = model
-                return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+                return model, device, ct, warn_msg, ct_err
             except Exception as e:
                 last_err = e
                 if ct == first_ct:
-                    ct_warn = str(e)
+                    ct_err = str(e)
     if device_mode == "auto":
         try:
             model = WhisperModel(model_path, device="cpu", compute_type="float32")
-            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_warn)
+            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_err)
         except Exception:
             raise last_err if last_err else RuntimeError("模型加载失败")
     raise last_err if last_err else RuntimeError("模型加载失败")
