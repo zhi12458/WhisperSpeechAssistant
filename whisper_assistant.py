@@ -269,15 +269,31 @@ def load_model(
             return model, device, compute_type, warn_msg, None
         except Exception as e:
             if device_mode == "gpu" and compute_type == "float16":
-                warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
+                err = str(e)
+                lower = err.lower()
+                if (
+                    "out of memory" in lower
+                    or "insufficient memory" in lower
+                    or "failed to allocate" in lower
+                    or "do not support efficient float16" in lower
+                ):
+                    warn_msg = "显存不足，已切回 CPU + int8 模式"
+                    ct_err = (
+                        "CUDA 显存不足"
+                        if "do not support efficient float16" in lower
+                        else err
+                    )
+                else:
+                    warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
+                    ct_err = err
                 device = "cpu"
                 compute_type = "int8"
                 key = (model_path, device, compute_type)
                 if key in _model_cache:
-                    return _model_cache[key], device, compute_type, warn_msg, str(e)
+                    return _model_cache[key], device, compute_type, warn_msg, ct_err
                 model = WhisperModel(model_path, device=device, compute_type=compute_type)
                 _model_cache[key] = model
-                return model, device, compute_type, warn_msg, str(e)
+                return model, device, compute_type, warn_msg, ct_err
             else:
                 raise
 
