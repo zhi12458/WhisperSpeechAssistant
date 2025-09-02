@@ -170,8 +170,35 @@ def pick_device_and_compute_type(mode: str = "auto"):
 
 _model_cache = {}
 
-def load_model(model_path: str, backend: str, device_mode: str = "auto"):
+
+def guess_model_precision(model_path: str) -> str | None:
+    """Best-effort detection of a CTranslate2 model's quantization.
+
+    ``config.json`` does not record the quantization of converted models, so the
+    detection relies solely on the directory name (e.g. ``ct2int8``/``ct2int16``).
+    """
+    # ``os.path.basename`` returns an empty string when ``model_path`` ends with
+    # a path separator.  Normalize first so trailing ``/`` or ``\\`` don't hide
+    # the directory name (which often embeds the precision, e.g. ``ct2int8``).
+    lower = os.path.basename(os.path.normpath(model_path)).lower()
+    for ct in ("int8", "int16", "int32", "float16", "float32"):
+        if ct in lower:
+            return ct
+    # handle names like "i8f16" where the activation precision follows an "f"
+    import re
+    m = re.search(r"i\d+f(16|32)", lower)
+    if m:
+        return f"float{m.group(1)}"
+    return None
+
+def load_model(
+    model_path: str,
+    backend: str,
+    device_mode: str = "auto",
+    compute_type: str | None = None,
+):
     warn_msg = None
+    ct_warn = None
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
 
@@ -198,7 +225,7 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
                 pass
         key = ("ggml", model_path, device)
         if key in _model_cache:
-            return _model_cache[key], device, "ggml", warn_msg
+            return _model_cache[key], device, "ggml", warn_msg, None
         try:
             model = Model(model_path, n_threads=n_threads, **params)
         except Exception:
@@ -213,45 +240,72 @@ def load_model(model_path: str, backend: str, device_mode: str = "auto"):
             else:
                 raise
         _model_cache[key] = model
-        return model, device, "ggml", warn_msg
-    device, first_ct = pick_device_and_compute_type(device_mode)
+        return model, device, "ggml", warn_msg, None
+    device, default_ct = pick_device_and_compute_type(device_mode)
+
+    # If the user explicitly chose both device and precision, load directly
+    # without checking for supported compute types or falling back.
+    if device_mode in ("cpu", "gpu") and compute_type is not None:
+        if device_mode == "gpu" and device != "cuda":
+            raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+        key = (model_path, device, compute_type)
+        if key in _model_cache:
+            return _model_cache[key], device, compute_type, warn_msg, None
+        model = WhisperModel(model_path, device=device, compute_type=compute_type)
+        _model_cache[key] = model
+        return model, device, compute_type, warn_msg, None
+
+    model_ct = None if backend == "ggml" else guess_model_precision(model_path)
+    first_ct = compute_type or model_ct or default_ct
+
     if device_mode == "gpu" and device != "cuda":
         raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+
+    fallbacks = [first_ct]
     if device == "cuda":
-        fallbacks = [first_ct, "float32", "int8"]
+        for ct in ["float16", "float32", "int8"]:
+            if ct not in fallbacks:
+                fallbacks.append(ct)
     else:
-        fallbacks = [first_ct, "int16", "float32", "float16"]
+        for ct in ["int8", "int16", "int32", "float32", "float16"]:
+            if ct not in fallbacks:
+                fallbacks.append(ct)
     last_err = None
     for ct in fallbacks:
         key = (model_path, device, ct)
         if key in _model_cache:
-            return _model_cache[key], device, ct, warn_msg
+            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
         try:
             model = WhisperModel(model_path, device=device, compute_type=ct)
             _model_cache[key] = model
-            return model, device, ct, warn_msg
+            return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
         except Exception as e:
             last_err = e
+            if ct == first_ct:
+                ct_warn = str(e)
     if device == "cuda":
         if device_mode == "gpu":
             raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
         warn_msg = "GPU 初始化失败，已切回 CPU 模式"
         device = "cpu"
         last_err = None
-        for ct in ["int16", "float32", "float16"]:
+        ct_warn = None
+        for ct in ["int8", "int16", "int32", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
-                return _model_cache[key], device, ct, warn_msg
+                return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
             try:
                 model = WhisperModel(model_path, device=device, compute_type=ct)
                 _model_cache[key] = model
-                return model, device, ct, warn_msg
+                return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
             except Exception as e:
                 last_err = e
+                if ct == first_ct:
+                    ct_warn = str(e)
     if device_mode == "auto":
         try:
             model = WhisperModel(model_path, device="cpu", compute_type="float32")
-            return model, "cpu", "float32", warn_msg
+            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_warn)
         except Exception:
             raise last_err if last_err else RuntimeError("模型加载失败")
     raise last_err if last_err else RuntimeError("模型加载失败")
@@ -348,6 +402,7 @@ def transcribe_with_progress(
     progress_cb,
     stop_event=None,
     device_mode: str = "auto",
+    compute_type: str | None = None,
     word_timestamps: bool = False,
     max_len: int | None = None,
     max_tokens: int | None = None,
@@ -360,13 +415,40 @@ def transcribe_with_progress(
         raise FileNotFoundError(f"未找到文件：{media_path}")
     if is_ggml_model(model_path):
         backend = "ggml"
-    model, device, compute_type, warn_msg = load_model(model_path, backend, device_mode=device_mode)
-    if warn_msg:
-        logger(f"[WARN] {warn_msg}")
-        try:
-            messagebox.showwarning("GPU 初始化失败", warn_msg)
-        except Exception:
-            pass
+    model_prec = None if backend == "ggml" else guess_model_precision(model_path)
+    requested_ct = compute_type
+
+    def load_and_log(dev_mode: str):
+        nonlocal model_prec, requested_ct
+        default_ct = pick_device_and_compute_type(dev_mode)[1]
+        first_ct = requested_ct or model_prec or default_ct
+        mdl, dev, ct, warn, ct_err = load_model(
+            model_path, backend, device_mode=dev_mode, compute_type=requested_ct
+        )
+        if first_ct != ct:
+            if requested_ct:
+                msg = f"Requested compute_type={requested_ct} but using {ct}"
+            elif model_prec:
+                msg = f"Model quantized to {model_prec} but using {ct}"
+            else:
+                msg = f"Auto-selected compute_type={first_ct} but using {ct}"
+            if ct_err is not None:
+                if str(ct_err).strip():
+                    msg += f": {ct_err}"
+                else:
+                    msg += ": requested precision not supported by backend"
+            logger(f"[WARN] {msg}")
+        elif ct_err is not None:
+            logger(f"[WARN] {ct_err}")
+        if warn:
+            logger(f"[WARN] {warn}")
+            try:
+                messagebox.showwarning("GPU 初始化失败", warn)
+            except Exception:
+                pass
+        return mdl, dev, ct
+
+    model, device, compute_type = load_and_log(device_mode)
     if word_timestamps and max_len is None:
         max_len = 40
         logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
@@ -419,21 +501,49 @@ def transcribe_with_progress(
         segments = seg_list
     else:
         logger(f"[INFO] Using device={device}, compute_type={compute_type}")
-        segments, _ = run_full_transcribe(
-            model,
-            media_path,
-            language,
-            logger,
-            progress_cb,
-            stop_event,
-            word_timestamps=word_timestamps,
-            max_len=max_len,
-            max_tokens=max_tokens,
-            use_context=use_context,
-            beam_search=beam_search,
-            beam_width=beam_width,
-            n_best=n_best,
-        )
+        try:
+            segments, _ = run_full_transcribe(
+                model,
+                media_path,
+                language,
+                logger,
+                progress_cb,
+                stop_event,
+                word_timestamps=word_timestamps,
+                max_len=max_len,
+                max_tokens=max_tokens,
+                use_context=use_context,
+                beam_search=beam_search,
+                beam_width=beam_width,
+                n_best=n_best,
+            )
+        except RuntimeError as e:
+            if (
+                device_mode == "auto"
+                and device == "cuda"
+                and "out of memory" in str(e).lower()
+            ):
+                logger("[WARN] CUDA out of memory, retrying on CPU")
+                progress_cb(0)
+                model, device, compute_type = load_and_log("cpu")
+                logger(f"[INFO] Using device={device}, compute_type={compute_type}")
+                segments, _ = run_full_transcribe(
+                    model,
+                    media_path,
+                    language,
+                    logger,
+                    progress_cb,
+                    stop_event,
+                    word_timestamps=word_timestamps,
+                    max_len=max_len,
+                    max_tokens=max_tokens,
+                    use_context=use_context,
+                    beam_search=beam_search,
+                    beam_width=beam_width,
+                    n_best=n_best,
+                )
+            else:
+                raise
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
     if fmt == "srt":
@@ -475,6 +585,18 @@ class WhisperApp(tk.Tk):
         )
         self.device_combo.current(0)
         self.device_combo.grid(row=1, column=1, sticky="w")
+        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
+
+        tk.Label(self, text="精度:").grid(row=1, column=2, sticky="w", padx=12)
+        self.compute_type_var = tk.StringVar()
+        self.compute_type_combo = ttk.Combobox(
+            self,
+            textvariable=self.compute_type_var,
+            width=8,
+            state="disabled",
+        )
+        self.compute_type_combo.grid(row=1, column=3, sticky="w")
+        self.on_device_change()
 
         tk.Label(self, text="模型路径:").grid(row=2, column=0, sticky="w", padx=12, pady=8)
         self.model_entry = tk.Entry(self, width=62)
@@ -532,6 +654,25 @@ class WhisperApp(tk.Tk):
         if path:
             self.media_entry.delete(0, tk.END)
             self.media_entry.insert(0, path)
+
+    def on_device_change(self, event=None):
+        device = self.device_var.get()
+        if device == "cpu":
+            vals = ["int8", "int16", "int32"]
+            self.compute_type_combo["values"] = vals
+            self.compute_type_combo.config(state="readonly")
+            self.compute_type_combo.current(0)
+            self.compute_type_var.set(vals[0])
+        elif device == "gpu":
+            vals = ["float16", "float32"]
+            self.compute_type_combo["values"] = vals
+            self.compute_type_combo.config(state="readonly")
+            self.compute_type_combo.current(0)
+            self.compute_type_var.set(vals[0])
+        else:
+            self.compute_type_var.set("")
+            self.compute_type_combo["values"] = []
+            self.compute_type_combo.config(state="disabled")
 
     def log(self, text: str):
         self.log_text.config(state="normal")
@@ -628,6 +769,11 @@ class WhisperApp(tk.Tk):
         self.log(f"输出格式：{fmt.upper()}，语言：{lang}")
         device_mode = self.device_var.get()
         self.log(f"设备：{device_mode}")
+        compute_type = self.compute_type_var.get().strip()
+        if compute_type:
+            self.log(f"精度：{compute_type}")
+        else:
+            compute_type = None
         self.set_running(True)
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
@@ -649,6 +795,7 @@ class WhisperApp(tk.Tk):
                     progress_cb=progress_cb,
                     stop_event=self.stop_event,
                     device_mode=device_mode,
+                    compute_type=compute_type,
                     use_context=self.use_context_var.get(),
                     beam_search=self.beam_search_var.get(),
                     beam_width=DEFAULT_BEAM_WIDTH,
