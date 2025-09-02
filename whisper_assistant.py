@@ -92,14 +92,14 @@ def detectVoice(samples: np.ndarray, sample_rate: int = 16000) -> int:
     flatness = gm / (am + 1e-10)
     if flatness > 0.5:
         return 0
-    corr = np.correlate(samples, samples, mode="full")
-    corr = corr[corr.size // 2 :]
-    min_lag = int(sample_rate / 400)
-    max_lag = int(sample_rate / 70)
-    if max_lag > corr.size:
-        max_lag = corr.size
+    min_lag = sample_rate // 400
+    max_lag = sample_rate // 70
+    n = samples.size
+    nfft = 1 << ((n + max_lag - 1).bit_length())
+    spec2 = np.fft.rfft(samples, nfft)
+    corr = np.fft.irfft(np.abs(spec2) ** 2, nfft)[:max_lag]
     corr[:min_lag] = 0
-    peak = np.argmax(corr[:max_lag])
+    peak = np.argmax(corr)
     if peak <= 0:
         return 0
     pitch = sample_rate / peak
