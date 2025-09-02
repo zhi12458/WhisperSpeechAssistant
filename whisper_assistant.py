@@ -242,6 +242,19 @@ def load_model(
         _model_cache[key] = model
         return model, device, "ggml", warn_msg, None
     device, default_ct = pick_device_and_compute_type(device_mode)
+
+    # If the user explicitly chose both device and precision, load directly
+    # without checking for supported compute types or falling back.
+    if device_mode in ("cpu", "gpu") and compute_type is not None:
+        if device_mode == "gpu" and device != "cuda":
+            raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+        key = (model_path, device, compute_type)
+        if key in _model_cache:
+            return _model_cache[key], device, compute_type, warn_msg, None
+        model = WhisperModel(model_path, device=device, compute_type=compute_type)
+        _model_cache[key] = model
+        return model, device, compute_type, warn_msg, None
+
     model_ct = None if backend == "ggml" else guess_model_precision(model_path)
     first_ct = compute_type or model_ct or default_ct
 
