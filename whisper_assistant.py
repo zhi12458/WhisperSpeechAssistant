@@ -184,6 +184,11 @@ def guess_model_precision(model_path: str) -> str | None:
     for ct in ("int8", "int16", "int32", "float16", "float32"):
         if ct in lower:
             return ct
+    # handle names like "i8f16" where the activation precision follows an "f"
+    import re
+    m = re.search(r"i\d+f(16|32)", lower)
+    if m:
+        return f"float{m.group(1)}"
     return None
 
 def load_model(
@@ -399,32 +404,38 @@ def transcribe_with_progress(
         backend = "ggml"
     model_prec = None if backend == "ggml" else guess_model_precision(model_path)
     requested_ct = compute_type
-    model, device, compute_type, warn_msg, ct_warn = load_model(
-        model_path, backend, device_mode=device_mode, compute_type=requested_ct
-    )
-    if requested_ct and requested_ct != compute_type:
-        msg = f"Requested compute_type={requested_ct} but using {compute_type}"
-        if ct_warn is not None:
-            if str(ct_warn).strip():
-                msg += f": {ct_warn}"
+
+    def load_and_log(dev_mode: str):
+        nonlocal model_prec, requested_ct
+        default_ct = pick_device_and_compute_type(dev_mode)[1]
+        first_ct = requested_ct or model_prec or default_ct
+        mdl, dev, ct, warn, ct_err = load_model(
+            model_path, backend, device_mode=dev_mode, compute_type=requested_ct
+        )
+        if first_ct != ct:
+            if requested_ct:
+                msg = f"Requested compute_type={requested_ct} but using {ct}"
+            elif model_prec:
+                msg = f"Model quantized to {model_prec} but using {ct}"
             else:
-                msg += ": requested precision not supported by backend"
-        elif model_prec:
-            msg += f" (model quantized to {model_prec})"
-        logger(f"[WARN] {msg}")
-    elif ct_warn is not None and model_prec and model_prec != compute_type:
-        msg = f"Model quantized to {model_prec} but using {compute_type}"
-        if str(ct_warn).strip():
-            msg += f": {ct_warn}"
-        else:
-            msg += ": requested precision not supported by backend"
-        logger(f"[WARN] {msg}")
-    if warn_msg:
-        logger(f"[WARN] {warn_msg}")
-        try:
-            messagebox.showwarning("GPU 初始化失败", warn_msg)
-        except Exception:
-            pass
+                msg = f"Auto-selected compute_type={first_ct} but using {ct}"
+            if ct_err is not None:
+                if str(ct_err).strip():
+                    msg += f": {ct_err}"
+                else:
+                    msg += ": requested precision not supported by backend"
+            logger(f"[WARN] {msg}")
+        elif ct_err is not None:
+            logger(f"[WARN] {ct_err}")
+        if warn:
+            logger(f"[WARN] {warn}")
+            try:
+                messagebox.showwarning("GPU 初始化失败", warn)
+            except Exception:
+                pass
+        return mdl, dev, ct
+
+    model, device, compute_type = load_and_log(device_mode)
     if word_timestamps and max_len is None:
         max_len = 40
         logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
@@ -477,21 +488,49 @@ def transcribe_with_progress(
         segments = seg_list
     else:
         logger(f"[INFO] Using device={device}, compute_type={compute_type}")
-        segments, _ = run_full_transcribe(
-            model,
-            media_path,
-            language,
-            logger,
-            progress_cb,
-            stop_event,
-            word_timestamps=word_timestamps,
-            max_len=max_len,
-            max_tokens=max_tokens,
-            use_context=use_context,
-            beam_search=beam_search,
-            beam_width=beam_width,
-            n_best=n_best,
-        )
+        try:
+            segments, _ = run_full_transcribe(
+                model,
+                media_path,
+                language,
+                logger,
+                progress_cb,
+                stop_event,
+                word_timestamps=word_timestamps,
+                max_len=max_len,
+                max_tokens=max_tokens,
+                use_context=use_context,
+                beam_search=beam_search,
+                beam_width=beam_width,
+                n_best=n_best,
+            )
+        except RuntimeError as e:
+            if (
+                device_mode == "auto"
+                and device == "cuda"
+                and "out of memory" in str(e).lower()
+            ):
+                logger("[WARN] CUDA out of memory, retrying on CPU")
+                progress_cb(0)
+                model, device, compute_type = load_and_log("cpu")
+                logger(f"[INFO] Using device={device}, compute_type={compute_type}")
+                segments, _ = run_full_transcribe(
+                    model,
+                    media_path,
+                    language,
+                    logger,
+                    progress_cb,
+                    stop_event,
+                    word_timestamps=word_timestamps,
+                    max_len=max_len,
+                    max_tokens=max_tokens,
+                    use_context=use_context,
+                    beam_search=beam_search,
+                    beam_width=beam_width,
+                    n_best=n_best,
+                )
+            else:
+                raise
     base, _ = os.path.splitext(media_path)
     outfile = base + (".srt" if fmt == "srt" else ".txt")
     if fmt == "srt":
