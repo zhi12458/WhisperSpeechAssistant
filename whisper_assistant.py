@@ -157,6 +157,18 @@ def pick_device_and_compute_type(mode: str = "auto"):
             import ctranslate2 as c2  # type: ignore
             get_cnt = getattr(c2, "get_cuda_device_count", None)
             if callable(get_cnt) and get_cnt() > 0:
+                get_supported = getattr(c2, "get_supported_compute_types", None)
+                if callable(get_supported):
+                    try:
+                        supported = get_supported("cuda")
+                    except Exception:
+                        supported = []
+                    if "float16" in supported:
+                        return "cuda", "float16"
+                    if "float32" in supported:
+                        return "cuda", "float32"
+                    if supported:
+                        return "cuda", supported[0]
                 return "cuda", "float16"
         except Exception:
             pass
