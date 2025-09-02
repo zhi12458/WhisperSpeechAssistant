@@ -150,13 +150,16 @@ def get_media_duration(media_path: str) -> float | None:
         return None
 
 def pick_device_and_compute_type(mode: str = "auto"):
+    warn = None
     if mode == "cpu" or os.environ.get("WHISPER_FORCE_CPU") == "1":
-        return "cpu", "int8"
+        return "cpu", "int8", warn
     if mode in ("gpu", "auto"):
+        has_cuda = False
         try:
             import ctranslate2 as c2  # type: ignore
             get_cnt = getattr(c2, "get_cuda_device_count", None)
             if callable(get_cnt) and get_cnt() > 0:
+                has_cuda = True
                 get_supported = getattr(c2, "get_supported_compute_types", None)
                 if callable(get_supported):
                     try:
@@ -164,21 +167,23 @@ def pick_device_and_compute_type(mode: str = "auto"):
                     except Exception:
                         supported = []
                     if "float16" in supported:
-                        return "cuda", "float16"
+                        return "cuda", "float16", warn
                     if "float32" in supported:
-                        return "cuda", "float32"
+                        return "cuda", "float32", warn
                     if supported:
-                        return "cuda", supported[0]
-                return "cuda", "float16"
+                        return "cuda", supported[0], warn
+                return "cuda", "float16", warn
         except Exception:
             pass
-        try:
-            import torch  # type: ignore
-            if torch.cuda.is_available():
-                return "cuda", "float16"
-        except Exception:
-            pass
-    return "cpu", "int8"
+        if not has_cuda:
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    return "cuda", "float16", warn
+            except Exception:
+                pass
+            warn = "未检测到可用 GPU"
+    return "cpu", "int8", warn
 
 _model_cache = {}
 
@@ -253,13 +258,15 @@ def load_model(
                 raise
         _model_cache[key] = model
         return model, device, "ggml", warn_msg, None
-    device, default_ct = pick_device_and_compute_type(device_mode)
+    device, default_ct, device_warn = pick_device_and_compute_type(device_mode)
+    if device_warn:
+        warn_msg = device_warn
 
     # If the user explicitly chose both device and precision, try to honor it
     # but fall back to CPU+int8 if the GPU float16 request fails.
     if device_mode in ("cpu", "gpu") and compute_type is not None:
         if device_mode == "gpu" and device != "cuda":
-            raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+            raise RuntimeError(device_warn or "GPU 初始化失败，请切换到 CPU 模式")
         key = (model_path, device, compute_type)
         if key in _model_cache:
             return _model_cache[key], device, compute_type, warn_msg, None
@@ -301,7 +308,7 @@ def load_model(
     first_ct = compute_type or model_ct or default_ct
 
     if device_mode == "gpu" and device != "cuda":
-        raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+        raise RuntimeError(device_warn or "GPU 初始化失败，请切换到 CPU 模式")
 
     fallbacks = [first_ct]
     if device == "cuda":
@@ -485,10 +492,11 @@ def transcribe_with_progress(
             logger(f"[WARN] {ct_err}")
         if warn:
             logger(f"[WARN] {warn}")
-            try:
-                messagebox.showwarning("GPU 初始化失败", warn)
-            except Exception:
-                pass
+            if "未检测到可用 GPU" not in warn:
+                try:
+                    messagebox.showwarning("GPU 初始化失败", warn)
+                except Exception:
+                    pass
         return mdl, dev, ct
 
     model, device, compute_type = load_and_log(device_mode)
