@@ -150,23 +150,40 @@ def get_media_duration(media_path: str) -> float | None:
         return None
 
 def pick_device_and_compute_type(mode: str = "auto"):
+    warn = None
     if mode == "cpu" or os.environ.get("WHISPER_FORCE_CPU") == "1":
-        return "cpu", "int8"
+        return "cpu", "int8", warn
     if mode in ("gpu", "auto"):
+        has_cuda = False
         try:
             import ctranslate2 as c2  # type: ignore
             get_cnt = getattr(c2, "get_cuda_device_count", None)
             if callable(get_cnt) and get_cnt() > 0:
-                return "cuda", "float16"
+                has_cuda = True
+                get_supported = getattr(c2, "get_supported_compute_types", None)
+                if callable(get_supported):
+                    try:
+                        supported = get_supported("cuda")
+                    except Exception:
+                        supported = []
+                    if "float16" in supported:
+                        return "cuda", "float16", warn
+                    if "float32" in supported:
+                        return "cuda", "float32", warn
+                    if supported:
+                        return "cuda", supported[0], warn
+                return "cuda", "float16", warn
         except Exception:
             pass
-        try:
-            import torch  # type: ignore
-            if torch.cuda.is_available():
-                return "cuda", "float16"
-        except Exception:
-            pass
-    return "cpu", "int8"
+        if not has_cuda:
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    return "cuda", "float16", warn
+            except Exception:
+                pass
+            warn = "未检测到可用 GPU"
+    return "cpu", "int8", warn
 
 _model_cache = {}
 
@@ -198,7 +215,7 @@ def load_model(
     compute_type: str | None = None,
 ):
     warn_msg = None
-    ct_warn = None
+    ct_err = None
     if backend == "ggml":
         from pywhispercpp.model import Model  # type: ignore
 
@@ -241,31 +258,64 @@ def load_model(
                 raise
         _model_cache[key] = model
         return model, device, "ggml", warn_msg, None
-    device, default_ct = pick_device_and_compute_type(device_mode)
+    device, default_ct, device_warn = pick_device_and_compute_type(device_mode)
+    if device_warn:
+        warn_msg = device_warn
 
-    # If the user explicitly chose both device and precision, load directly
-    # without checking for supported compute types or falling back.
+    # If the user explicitly chose both device and precision, try to honor it
+    # but fall back to CPU+int8 if the GPU float16 request fails.
     if device_mode in ("cpu", "gpu") and compute_type is not None:
         if device_mode == "gpu" and device != "cuda":
-            raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+            raise RuntimeError(device_warn or "GPU 初始化失败，请切换到 CPU 模式")
         key = (model_path, device, compute_type)
         if key in _model_cache:
             return _model_cache[key], device, compute_type, warn_msg, None
-        model = WhisperModel(model_path, device=device, compute_type=compute_type)
-        _model_cache[key] = model
-        return model, device, compute_type, warn_msg, None
+        try:
+            model = WhisperModel(model_path, device=device, compute_type=compute_type)
+            _model_cache[key] = model
+            return model, device, compute_type, warn_msg, None
+        except Exception as e:
+            if device_mode == "gpu" and compute_type == "float16":
+                err = str(e)
+                lower = err.lower()
+                if (
+                    "out of memory" in lower
+                    or "insufficient memory" in lower
+                    or "failed to allocate" in lower
+                    or "do not support efficient float16" in lower
+                ):
+                    warn_msg = "显存不足，已切回 CPU + int8 模式"
+                    ct_err = (
+                        "CUDA 显存不足"
+                        if "do not support efficient float16" in lower
+                        else err
+                    )
+                else:
+                    warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
+                    ct_err = err
+                device = "cpu"
+                compute_type = "int8"
+                key = (model_path, device, compute_type)
+                if key in _model_cache:
+                    return _model_cache[key], device, compute_type, warn_msg, ct_err
+                model = WhisperModel(model_path, device=device, compute_type=compute_type)
+                _model_cache[key] = model
+                return model, device, compute_type, warn_msg, ct_err
+            else:
+                raise
 
     model_ct = None if backend == "ggml" else guess_model_precision(model_path)
     first_ct = compute_type or model_ct or default_ct
 
     if device_mode == "gpu" and device != "cuda":
-        raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
+        raise RuntimeError(device_warn or "GPU 初始化失败，请切换到 CPU 模式")
 
     fallbacks = [first_ct]
     if device == "cuda":
-        for ct in ["float16", "float32", "int8"]:
-            if ct not in fallbacks:
-                fallbacks.append(ct)
+        if first_ct != "float16":
+            for ct in ["float16", "float32", "int8"]:
+                if ct not in fallbacks:
+                    fallbacks.append(ct)
     else:
         for ct in ["int8", "int16", "int32", "float32", "float16"]:
             if ct not in fallbacks:
@@ -274,38 +324,54 @@ def load_model(
     for ct in fallbacks:
         key = (model_path, device, ct)
         if key in _model_cache:
-            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+            return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_err)
         try:
             model = WhisperModel(model_path, device=device, compute_type=ct)
             _model_cache[key] = model
-            return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+            return model, device, ct, warn_msg, (None if ct == first_ct else ct_err)
         except Exception as e:
             last_err = e
             if ct == first_ct:
-                ct_warn = str(e)
+                ct_err = str(e)
     if device == "cuda":
         if device_mode == "gpu":
             raise RuntimeError("GPU 初始化失败，请切换到 CPU 模式")
-        warn_msg = "GPU 初始化失败，已切回 CPU 模式"
+        if ct_err:
+            lower = ct_err.lower()
+            if (
+                "out of memory" in lower
+                or "insufficient memory" in lower
+                or "failed to allocate" in lower
+                or "do not support efficient float16" in lower
+            ):
+                warn_msg = "显存不足，已切回 CPU + int8 模式"
+                ct_err = (
+                    "CUDA 显存不足"
+                    if "do not support efficient float16" in lower
+                    else ct_err
+                )
+            else:
+                warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
+        else:
+            warn_msg = "GPU 初始化失败，已切回 CPU + int8 模式"
         device = "cpu"
         last_err = None
-        ct_warn = None
         for ct in ["int8", "int16", "int32", "float32", "float16"]:
             key = (model_path, device, ct)
             if key in _model_cache:
-                return _model_cache[key], device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+                return _model_cache[key], device, ct, warn_msg, ct_err
             try:
                 model = WhisperModel(model_path, device=device, compute_type=ct)
                 _model_cache[key] = model
-                return model, device, ct, warn_msg, (None if ct == first_ct else ct_warn)
+                return model, device, ct, warn_msg, ct_err
             except Exception as e:
                 last_err = e
                 if ct == first_ct:
-                    ct_warn = str(e)
+                    ct_err = str(e)
     if device_mode == "auto":
         try:
             model = WhisperModel(model_path, device="cpu", compute_type="float32")
-            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_warn)
+            return model, "cpu", "float32", warn_msg, (None if "float32" == first_ct else ct_err)
         except Exception:
             raise last_err if last_err else RuntimeError("模型加载失败")
     raise last_err if last_err else RuntimeError("模型加载失败")
@@ -442,10 +508,11 @@ def transcribe_with_progress(
             logger(f"[WARN] {ct_err}")
         if warn:
             logger(f"[WARN] {warn}")
-            try:
-                messagebox.showwarning("GPU 初始化失败", warn)
-            except Exception:
-                pass
+            if "未检测到可用 GPU" not in warn:
+                try:
+                    messagebox.showwarning("GPU 初始化失败", warn)
+                except Exception:
+                    pass
         return mdl, dev, ct
 
     model, device, compute_type = load_and_log(device_mode)
