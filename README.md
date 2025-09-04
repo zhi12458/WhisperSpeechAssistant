@@ -10,11 +10,10 @@
   未指定精度时，程序会自动选择并在必要时回退；若手动选择的精度与模型或设备不兼容，将直接报错；
   某些 CTranslate2 发行版仅包含 `int8`/`float32` 支持，若选择未编译的精度（如 `int16`）将报错提示
 - CTranslate2 模型在转换时已固定精度（如目录名含 `int8`/`int16` 等），
-  推理时需使用相同或更高精度；例如 `ct2int16` 模型无法以 `int8` 推理；
-  程序仅根据模型目录名推测其精度，`config.json` 中不包含量化信息
+  推理时需使用相同或更高精度；例如 `ct2int16` 模型无法以 `int8` 推理
 - 支持中文（默认 `language="zh"`），可切换自动检测
 - 可选 **Beam Search**（默认 `beam_width=10`, `n_best=5`），通过同时探索多条假设路径提升识别正确率
-<img width="582" height="374" alt="0eb08675990ed5362e766de0025b7b6" src="https://github.com/user-attachments/assets/8b3bd069-929a-477f-997a-656e1bfa8141" />
+<img width="1164" height="748" alt="image" src="https://github.com/user-attachments/assets/20215de2-fbf4-447b-b811-c6b01698d8a8" />
 
 ## 项目背景 · Motivation
 
@@ -84,7 +83,7 @@ WhisperSpeechAssistant/
 ├─ README.md
 ├─ LICENSE
 └─ models/
-   ├─ belle-whisper-large-v3-turbo-ct2i8f16/  # CTranslate2 模型目录
+   ├─ whisper-large-v3-turbo-ct2-i8f16/  # CTranslate2 模型目录
    │   └─ ...
    └─ ggml-base.bin                           # ggml 模型文件示例
 ```
