@@ -14,6 +14,7 @@
   程序仅根据模型目录名推测其精度，`config.json` 中不包含量化信息
 - 支持中文（默认 `language="zh"`），可切换自动检测
 - 可选 **Beam Search**（默认 `beam_width=10`, `n_best=5`），通过同时探索多条假设路径提升识别正确率
+<img width="582" height="374" alt="0eb08675990ed5362e766de0025b7b6" src="https://github.com/user-attachments/assets/8b3bd069-929a-477f-997a-656e1bfa8141" />
 
 ## 项目背景 · Motivation
 
