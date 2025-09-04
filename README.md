@@ -1,5 +1,7 @@
 # Whisper 语音识别助手 · Whisper Speech Transcriber
 
+[English README](README_EN.md)
+
 基于 **faster-whisper (CTranslate2)** 或 **whisper.cpp (ggml)** + **Tkinter** 的离线转写工具：
 - 选择音频/视频文件，一键转成 **SRT** 字幕或 **TXT** 文本
 - 默认自动检测并优先使用 **GPU(CUDA)**，界面提供 **auto/cpu/gpu** 选项；
@@ -15,11 +17,9 @@
 - 可选 **Beam Search**（默认 `beam_width=10`, `n_best=5`），通过同时探索多条假设路径提升识别正确率
 <img width="1164" height="748" alt="image" src="https://github.com/user-attachments/assets/20215de2-fbf4-447b-b811-c6b01698d8a8" />
 
-## 项目背景 · Motivation
+## 项目背景
 
-我最初使用 **WhisperDesktop** 作为转写工具，但该项目已长期停止维护，无法很好地兼容最新的 **Whisper v3** 和 **Whisper v3-turbo** 模型。为了使用最新版本的whisper模型，我基于 **faster-whisper** 与 **whisper.cpp** 重新实现了这个开源助手。
-
-I initially relied on **WhisperDesktop** for transcription, yet it has not been updated for a long time and fails to work with the latest **Whisper v3** and **Whisper v3-turbo** models. To keep pace with new releases, I built this open-source assistant on top of **faster-whisper** and **whisper.cpp**.
+我最初使用 **WhisperDesktop** 作为转写工具，但该项目已长期停止维护，无法很好地兼容最新的 **Whisper v3** 和 **Whisper v3-turbo** 模型。为了使用最新版本的 whisper 模型，我基于 **faster-whisper** 与 **whisper.cpp** 重新实现了这个开源助手。
 
 ## 快速开始
 
