@@ -69,7 +69,8 @@ def sample_best(
     ts_max = ts_probs.max() if ts_probs.size > 0 else 0.0
     if ts_max < thold_pt or ts_probs.sum() < thold_ptsum:
         probs[timestamp_mask] = 0.0
-    top_indices = np.argsort(probs)[-top_k:]
+    # Use argpartition to partially sort and retrieve only the top-k indices
+    top_indices = np.argpartition(probs, -top_k)[-top_k:]
     best_idx = top_indices[np.argmax(probs[top_indices])]
     return int(best_idx)
 
