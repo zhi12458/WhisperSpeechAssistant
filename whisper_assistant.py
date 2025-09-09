@@ -480,7 +480,8 @@ def run_full_transcribe(
         str(sample_rate),
         "-",
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    err_output = ""
     offset_samples = 0
     try:
         while True:
@@ -544,11 +545,19 @@ def run_full_transcribe(
     finally:
         if proc.stdout:
             proc.stdout.close()
-        proc.terminate()
-        try:
-            proc.wait(timeout=1)
-        except Exception:
-            pass
+        if proc.stderr:
+            err_output = proc.stderr.read().decode("utf-8", "ignore")
+            proc.stderr.close()
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+    if proc.returncode not in (0, None):
+        raise RuntimeError(
+            f"ffmpeg exited with code {proc.returncode}: {err_output.strip()}"
+        )
     progress_cb(100)
     return segments, token_history
 
