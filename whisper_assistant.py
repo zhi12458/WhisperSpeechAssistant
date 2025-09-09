@@ -149,7 +149,7 @@ def write_txt(segments, outfile: str):
         for seg in segments:
             text = (seg.text or "").strip()
             if text:
-                f.write(text + "\\n")
+                f.write(text + "\n")
 
 def open_in_explorer(path: str):
     try:
