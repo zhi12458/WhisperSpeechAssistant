@@ -75,20 +75,37 @@ def sample_best(
 
 
 def detectVoice(samples: np.ndarray, sample_rate: int = 16000) -> int:
-    """Simple energy-based voice activity detection.
+    """Basic VAD using energy, pitch, and spectral flatness.
 
-    Returns 1 if the short-term energy of ``samples`` exceeds a threshold,
-    otherwise 0.  This lightweight approach avoids the FFT-heavy pitch and
-    spectral analysis used previously and is fast enough for real-time use."""
+    Returns 1 if voice is detected, otherwise 0."""
     if samples.size == 0:
         return 0
-    # Compute mean squared energy of the audio samples.  The audio is expected
-    # to be normalized to the range [-1, 1], so speech typically has energy
-    # noticeably above very small background noise levels.
-    energy = float(np.mean(samples ** 2))
-    # Tunable threshold: values around 1e-4 work well for 16 kHz mono audio.
-    threshold = 1e-4
-    return 1 if energy > threshold else 0
+    energy = np.mean(samples ** 2)
+    if energy < 1e-4:
+        return 0
+    spec = np.fft.rfft(samples)
+    mag = np.abs(spec)
+    if mag.size == 0:
+        return 0
+    gm = np.exp(np.mean(np.log(mag + 1e-10)))
+    am = np.mean(mag)
+    flatness = gm / (am + 1e-10)
+    if flatness > 0.5:
+        return 0
+    min_lag = sample_rate // 400
+    max_lag = sample_rate // 70
+    n = samples.size
+    nfft = 1 << ((n + max_lag - 1).bit_length())
+    spec2 = np.fft.rfft(samples, nfft)
+    corr = np.fft.irfft(np.abs(spec2) ** 2, nfft)[:max_lag]
+    corr[:min_lag] = 0
+    peak = np.argmax(corr)
+    if peak <= 0:
+        return 0
+    pitch = sample_rate / peak
+    if pitch < 70 or pitch > 400:
+        return 0
+    return 1
 
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
