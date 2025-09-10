@@ -224,25 +224,6 @@ def pick_device_and_compute_type(mode: str = "auto"):
 _model_cache = {}
 
 
-def cleanup_model(model, logger=lambda msg: None):
-    """Remove model from cache and release CUDA memory."""
-    # Drop any cached references to the model
-    for k, v in list(_model_cache.items()):
-        if v is model:
-            _model_cache.pop(k, None)
-    try:
-        logger("[DEBUG] releasing model")
-        del model
-    except Exception:
-        pass
-    try:
-        import torch  # type: ignore
-        torch.cuda.empty_cache()
-        logger("[DEBUG] CUDA cache emptied")
-    except Exception:
-        logger("[DEBUG] torch.cuda.empty_cache() unavailable")
-
-
 def guess_model_precision(model_path: str) -> str | None:
     """Best-effort detection of a CTranslate2 model's quantization.
 
@@ -579,63 +560,85 @@ def transcribe_with_progress(
                     pass
         return mdl, dev, ct
 
-    model = None
-    try:
-        model, device, compute_type = load_and_log(device_mode)
-        logger(f"[DEBUG] model loaded on {device} with compute_type={compute_type}")
-        if word_timestamps and max_len is None:
-            max_len = 40
-            logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
-        if backend == "ggml":
-            logger(f"[INFO] Using ggml backend (device={device})")
-            duration = get_media_duration(media_path)
-            if not duration or duration <= 0:
-                progress_cb(("mode", "indeterminate"))
-            else:
-                progress_cb(("mode", "determinate"))
-                progress_cb(0)
-            seg_list = []
-            last_p = 0
-
-            def cb(seg):
-                nonlocal last_p
-                seg.start = getattr(seg, "t0", 0) / 100.0
-                seg.end = getattr(seg, "t1", 0) / 100.0
-                seg_list.append(seg)
-                end_t = seg.end
-                if duration and duration > 0:
-                    p = int(min(100, max(0, (end_t / duration) * 100)))
-                    if p > last_p:
-                        last_p = p
-                        progress_cb(p)
-                logger(
-                    f"[SEG {len(seg_list)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
-                )
-                if stop_event and stop_event.is_set():
-                    raise TranscriptionStopped()
-
-            kwargs = {
-                "language": (language or ""),
-                "new_segment_callback": cb,
-                "print_progress": False,
-                "greedy": {"best_of": DEFAULT_TOP_K},
-                "thold_pt": TS_PROB_THRESHOLD,
-                "thold_ptsum": TS_PROB_SUM_THRESHOLD,
-            }
-            if beam_search:
-                kwargs["beam_search"] = {"beam_size": beam_width, "patience": -1.0}
-            if word_timestamps:
-                kwargs["word_timestamps"] = True
-            if max_len is not None:
-                kwargs["max_len"] = max_len
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-            model.transcribe(media_path, **kwargs)
-            progress_cb(100)
-            segments = seg_list
+    model, device, compute_type = load_and_log(device_mode)
+    if word_timestamps and max_len is None:
+        max_len = 40
+        logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
+    if backend == "ggml":
+        logger(f"[INFO] Using ggml backend (device={device})")
+        duration = get_media_duration(media_path)
+        if not duration or duration <= 0:
+            progress_cb(("mode", "indeterminate"))
         else:
-            logger(f"[INFO] Using device={device}, compute_type={compute_type}")
-            try:
+            progress_cb(("mode", "determinate"))
+            progress_cb(0)
+        seg_list = []
+        last_p = 0
+
+        def cb(seg):
+            nonlocal last_p
+            seg.start = getattr(seg, "t0", 0) / 100.0
+            seg.end = getattr(seg, "t1", 0) / 100.0
+            seg_list.append(seg)
+            end_t = seg.end
+            if duration and duration > 0:
+                p = int(min(100, max(0, (end_t / duration) * 100)))
+                if p > last_p:
+                    last_p = p
+                    progress_cb(p)
+            logger(
+                f"[SEG {len(seg_list)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+            )
+            if stop_event and stop_event.is_set():
+                raise TranscriptionStopped()
+
+        kwargs = {
+            "language": (language or ""),
+            "new_segment_callback": cb,
+            "print_progress": False,
+            "greedy": {"best_of": DEFAULT_TOP_K},
+            "thold_pt": TS_PROB_THRESHOLD,
+            "thold_ptsum": TS_PROB_SUM_THRESHOLD,
+        }
+        if beam_search:
+            kwargs["beam_search"] = {"beam_size": beam_width, "patience": -1.0}
+        if word_timestamps:
+            kwargs["word_timestamps"] = True
+        if max_len is not None:
+            kwargs["max_len"] = max_len
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        model.transcribe(media_path, **kwargs)
+        progress_cb(100)
+        segments = seg_list
+    else:
+        logger(f"[INFO] Using device={device}, compute_type={compute_type}")
+        try:
+            segments, _ = run_full_transcribe(
+                model,
+                media_path,
+                language,
+                logger,
+                progress_cb,
+                stop_event,
+                word_timestamps=word_timestamps,
+                max_len=max_len,
+                max_tokens=max_tokens,
+                use_context=use_context,
+                beam_search=beam_search,
+                beam_width=beam_width,
+                n_best=n_best,
+            )
+        except RuntimeError as e:
+            if (
+                device_mode == "auto"
+                and device == "cuda"
+                and "out of memory" in str(e).lower()
+            ):
+                logger("[WARN] CUDA out of memory, retrying on CPU")
+                progress_cb(0)
+                model, device, compute_type = load_and_log("cpu")
+                logger(f"[INFO] Using device={device}, compute_type={compute_type}")
                 segments, _ = run_full_transcribe(
                     model,
                     media_path,
@@ -651,46 +654,15 @@ def transcribe_with_progress(
                     beam_width=beam_width,
                     n_best=n_best,
                 )
-            except RuntimeError as e:
-                if (
-                    device_mode == "auto"
-                    and device == "cuda"
-                    and "out of memory" in str(e).lower()
-                ):
-                    logger("[WARN] CUDA out of memory, retrying on CPU")
-                    progress_cb(0)
-                    model, device, compute_type = load_and_log("cpu")
-                    logger(
-                        f"[INFO] Using device={device}, compute_type={compute_type}"
-                    )
-                    segments, _ = run_full_transcribe(
-                        model,
-                        media_path,
-                        language,
-                        logger,
-                        progress_cb,
-                        stop_event,
-                        word_timestamps=word_timestamps,
-                        max_len=max_len,
-                        max_tokens=max_tokens,
-                        use_context=use_context,
-                        beam_search=beam_search,
-                        beam_width=beam_width,
-                        n_best=n_best,
-                    )
-                else:
-                    raise
-        base, _ = os.path.splitext(media_path)
-        outfile = base + (".srt" if fmt == "srt" else ".txt")
-        if fmt == "srt":
-            write_srt(segments, outfile)
-        else:
-            write_txt(segments, outfile)
-        logger("[DEBUG] transcription finished")
-        return outfile
-    finally:
-        if model is not None:
-            cleanup_model(model, logger)
+            else:
+                raise
+    base, _ = os.path.splitext(media_path)
+    outfile = base + (".srt" if fmt == "srt" else ".txt")
+    if fmt == "srt":
+        write_srt(segments, outfile)
+    else:
+        write_txt(segments, outfile)
+    return outfile
 
 class WhisperApp(tk.Tk):
     def __init__(self, use_context: bool = False):
@@ -924,7 +896,6 @@ class WhisperApp(tk.Tk):
         self.stop_event = threading.Event()
 
         def worker():
-            self.enqueue("[DEBUG] worker thread started")
             try:
                 outfile = transcribe_with_progress(
                     model_path=model_path,
@@ -948,8 +919,6 @@ class WhisperApp(tk.Tk):
             except Exception as e:
                 err = f"{e}\n{traceback.format_exc()}"
                 self.enqueue(("DONE", False, err))
-            finally:
-                self.enqueue("[DEBUG] worker thread finished")
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
