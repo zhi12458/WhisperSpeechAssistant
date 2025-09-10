@@ -447,78 +447,117 @@ def run_full_transcribe(
     beam_width: int = DEFAULT_BEAM_WIDTH,
     n_best: int = DEFAULT_N_BEST,
 ):
+    """Transcribe an entire file while streaming audio from disk.
+
+    The audio is decoded incrementally (~30s chunks) to avoid loading the
+    whole file into memory at once.  Silences are skipped using ``detectVoice``
+    and the progress callback is updated as chunks are consumed.
     """
-    Process the entire audio in ~30s windows, accumulating segments.
-    This mimics the "runFull" strategy where the whole file is read
-    once and recognition happens on internal chunks that are later
-    concatenated.
-    """
-    audio = load_audio(media_path)
     sample_rate = 16000
-    total = len(audio)
-    if total <= 0:
-        return []
+    total_duration = get_media_duration(media_path)
+    total_samples = int(total_duration * sample_rate) if total_duration else None
     progress_cb(("mode", "determinate"))
     progress_cb(0)
     chunk_samples = sample_rate * 30
+    chunk_bytes = chunk_samples * 2  # s16le -> 2 bytes per sample
     segments = []
-    offset = 0.0
     last_p = 0
     token_history = []
     prev_tokens: list[int] = []
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
-    for start in range(0, total, chunk_samples):
-        end = min(total, start + chunk_samples)
-        if stop_event and stop_event.is_set():
-            raise TranscriptionStopped()
-        chunk = audio[start:end]
-        if detectVoice(chunk) == 0:
-            prev_tokens = []
-            token_history.clear()
-            offset += (end - start) / sample_rate
-            p = int(min(100, (end / total) * 100))
-            if p > last_p:
-                last_p = p
-                progress_cb(p)
-            continue
-        kwargs = {"language": language, "word_timestamps": word_timestamps}
-        if beam_search:
-            kwargs["beam_size"] = beam_width
-            kwargs["best_of"] = n_best
-        else:
-            kwargs["beam_size"] = 1
-            kwargs["best_of"] = DEFAULT_TOP_K
-        if use_context and prev_tokens:
-            if max_prompt_tokens:
-                kwargs["initial_prompt"] = prev_tokens[-max_prompt_tokens:]
+    # decode the audio stream using ffmpeg
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-i",
+        media_path,
+        "-f",
+        "s16le",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    err_output = ""
+    offset_samples = 0
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                raise TranscriptionStopped()
+            data = proc.stdout.read(chunk_bytes)
+            if not data:
+                break
+            chunk = np.frombuffer(data, np.int16).astype(np.float32) / 32768.0
+            if chunk.size == 0:
+                break
+            offset = offset_samples / sample_rate
+            if detectVoice(chunk) == 0:
+                prev_tokens = []
+                token_history.clear()
+                offset_samples += chunk.size
+                if total_samples:
+                    p = int(min(100, (offset_samples / total_samples) * 100))
+                    if p > last_p:
+                        last_p = p
+                        progress_cb(p)
+                continue
+            kwargs = {"language": language, "word_timestamps": word_timestamps}
+            if beam_search:
+                kwargs["beam_size"] = beam_width
+                kwargs["best_of"] = n_best
             else:
-                kwargs["initial_prompt"] = prev_tokens
-        if max_len is not None:
-            kwargs["max_len"] = max_len
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
-        current_tokens = []
-        for seg in sub_segments:
-            seg.start = (seg.start or 0.0) + offset
-            seg.end = (seg.end or 0.0) + offset
-            segments.append(seg)
-            logger(
-                f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
-            )
+                kwargs["beam_size"] = 1
+                kwargs["best_of"] = DEFAULT_TOP_K
+            if use_context and prev_tokens:
+                if max_prompt_tokens:
+                    kwargs["initial_prompt"] = prev_tokens[-max_prompt_tokens:]
+                else:
+                    kwargs["initial_prompt"] = prev_tokens
+            if max_len is not None:
+                kwargs["max_len"] = max_len
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
+            current_tokens = []
+            for seg in sub_segments:
+                seg.start = (seg.start or 0.0) + offset
+                seg.end = (seg.end or 0.0) + offset
+                segments.append(seg)
+                logger(
+                    f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+                )
+                if use_context:
+                    current_tokens.extend(seg.tokens)
             if use_context:
-                current_tokens.extend(seg.tokens)
-        if use_context:
-            prev_tokens.extend(current_tokens)
-            if max_prompt_tokens and len(prev_tokens) > max_prompt_tokens:
-                prev_tokens = prev_tokens[-max_prompt_tokens:]
-            token_history.append(current_tokens)
-        offset += (end - start) / sample_rate
-        p = int(min(100, (end / total) * 100))
-        if p > last_p:
-            last_p = p
-            progress_cb(p)
+                prev_tokens.extend(current_tokens)
+                if max_prompt_tokens and len(prev_tokens) > max_prompt_tokens:
+                    prev_tokens = prev_tokens[-max_prompt_tokens:]
+                token_history.append(current_tokens)
+            offset_samples += chunk.size
+            if total_samples:
+                p = int(min(100, (offset_samples / total_samples) * 100))
+                if p > last_p:
+                    last_p = p
+                    progress_cb(p)
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            err_output = proc.stderr.read().decode("utf-8", "ignore")
+            proc.stderr.close()
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+    if proc.returncode not in (0, None):
+        raise RuntimeError(
+            f"ffmpeg exited with code {proc.returncode}: {err_output.strip()}"
+        )
     progress_cb(100)
     return segments, token_history
 
