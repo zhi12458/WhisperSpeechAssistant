@@ -468,12 +468,13 @@ def run_full_transcribe(
     prev_tokens: list[int] = []
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
-    for start in range(0, total, chunk_samples):
+    for idx, start in enumerate(range(0, total, chunk_samples)):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        if detectVoice(chunk) == 0:
+        # Always process the first chunk to avoid losing early speech
+        if idx > 0 and detectVoice(chunk) == 0:
             prev_tokens = []
             token_history.clear()
             offset += (end - start) / sample_rate
