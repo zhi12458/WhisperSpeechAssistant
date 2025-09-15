@@ -410,6 +410,7 @@ def run_full_transcribe(
     beam_search: bool = False,
     beam_width: int = DEFAULT_BEAM_WIDTH,
     n_best: int = DEFAULT_N_BEST,
+    overlap: float = 1.0,
 ):
     """
     Process the entire audio in ~30s windows, accumulating segments.
@@ -425,14 +426,16 @@ def run_full_transcribe(
     progress_cb(("mode", "determinate"))
     progress_cb(0)
     chunk_samples = sample_rate * 30
+    overlap_samples = int(overlap * sample_rate)
+    stride = chunk_samples - overlap_samples if chunk_samples > overlap_samples else chunk_samples
     segments = []
-    offset = 0.0
+    last_end = 0.0
     last_p = 0
     token_history = []
     prev_tokens: list[int] = []
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
-    for start in range(0, total, chunk_samples):
+    for start in range(0, total, stride):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
@@ -455,21 +458,25 @@ def run_full_transcribe(
             kwargs["max_tokens"] = max_tokens
         sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
         current_tokens = []
+        offset = start / sample_rate
         for seg in sub_segments:
             seg.start = (seg.start or 0.0) + offset
             seg.end = (seg.end or 0.0) + offset
-            segments.append(seg)
-            logger(
-                f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
-            )
-            if use_context:
-                current_tokens.extend(seg.tokens)
+            if seg.end > last_end - 0.2:
+                if seg.start < last_end:
+                    seg.start = last_end
+                segments.append(seg)
+                logger(
+                    f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+                )
+                if use_context:
+                    current_tokens.extend(seg.tokens)
+                last_end = seg.end
         if use_context:
             prev_tokens.extend(current_tokens)
             if max_prompt_tokens and len(prev_tokens) > max_prompt_tokens:
                 prev_tokens = prev_tokens[-max_prompt_tokens:]
             token_history.append(current_tokens)
-        offset += (end - start) / sample_rate
         p = int(min(100, (end / total) * 100))
         if p > last_p:
             last_p = p
