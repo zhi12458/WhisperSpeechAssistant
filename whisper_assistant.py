@@ -404,8 +404,6 @@ def run_full_transcribe(
     progress_cb,
     stop_event,
     word_timestamps: bool = False,
-    max_len: int | None = None,
-    max_tokens: int | None = None,
     use_context: bool = False,
     beam_search: bool = False,
     beam_width: int = DEFAULT_BEAM_WIDTH,
@@ -454,10 +452,6 @@ def run_full_transcribe(
                 kwargs["initial_prompt"] = hf_tokenizer.decode(prompt_tokens)
             else:
                 kwargs["initial_prompt"] = prev_text
-        if max_len is not None:
-            kwargs["max_len"] = max_len
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
         sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
         current_tokens = []
         offset = start / sample_rate
@@ -549,10 +543,10 @@ def transcribe_with_progress(
     try:
         model, device, compute_type = load_and_log(device_mode)
         logger(f"[DEBUG] model loaded on {device} with compute_type={compute_type}")
-        if word_timestamps and max_len is None:
-            max_len = 40
-            logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
         if backend == "ggml":
+            if word_timestamps and max_len is None:
+                max_len = 40
+                logger(f"[INFO] word_timestamps enabled, set max_len={max_len}")
             logger(f"[INFO] Using ggml backend (device={device})")
             duration = get_media_duration(media_path)
             if not duration or duration <= 0:
@@ -610,8 +604,6 @@ def transcribe_with_progress(
                     progress_cb,
                     stop_event,
                     word_timestamps=word_timestamps,
-                    max_len=max_len,
-                    max_tokens=max_tokens,
                     use_context=use_context,
                     beam_search=beam_search,
                     beam_width=beam_width,
@@ -637,8 +629,6 @@ def transcribe_with_progress(
                         progress_cb,
                         stop_event,
                         word_timestamps=word_timestamps,
-                        max_len=max_len,
-                        max_tokens=max_tokens,
                         use_context=use_context,
                         beam_search=beam_search,
                         beam_width=beam_width,
