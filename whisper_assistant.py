@@ -432,9 +432,10 @@ def run_full_transcribe(
     last_end = 0.0
     last_p = 0
     token_history = []
-    prev_tokens: list[int] = []
+    prev_text = ""
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
+    hf_tokenizer = getattr(model, "hf_tokenizer", None)
     for start in range(0, total, stride):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
@@ -447,11 +448,12 @@ def run_full_transcribe(
         else:
             kwargs["beam_size"] = 1
             kwargs["best_of"] = DEFAULT_TOP_K
-        if use_context and prev_tokens:
-            if max_prompt_tokens:
-                kwargs["initial_prompt"] = prev_tokens[-max_prompt_tokens:]
+        if use_context and prev_text:
+            if max_prompt_tokens and hf_tokenizer is not None:
+                prompt_tokens = hf_tokenizer.encode(prev_text).ids[-max_prompt_tokens:]
+                kwargs["initial_prompt"] = hf_tokenizer.decode(prompt_tokens)
             else:
-                kwargs["initial_prompt"] = prev_tokens
+                kwargs["initial_prompt"] = prev_text
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
@@ -471,11 +473,13 @@ def run_full_transcribe(
                 )
                 if use_context:
                     current_tokens.extend(seg.tokens)
+                    prev_text += seg.text
+                    if max_prompt_tokens and hf_tokenizer is not None:
+                        ids = hf_tokenizer.encode(prev_text).ids
+                        if len(ids) > max_prompt_tokens:
+                            prev_text = hf_tokenizer.decode(ids[-max_prompt_tokens:])
                 last_end = seg.end
         if use_context:
-            prev_tokens.extend(current_tokens)
-            if max_prompt_tokens and len(prev_tokens) > max_prompt_tokens:
-                prev_tokens = prev_tokens[-max_prompt_tokens:]
             token_history.append(current_tokens)
         p = int(min(100, (end / total) * 100))
         if p > last_p:
