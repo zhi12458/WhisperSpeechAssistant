@@ -11,8 +11,6 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-import numpy as np
-
 # pip install faster-whisper
 from faster_whisper import WhisperModel
 # ``load_audio`` was removed in recent versions of ``faster-whisper``.
@@ -72,40 +70,6 @@ def sample_best(
     top_indices = np.argsort(probs)[-top_k:]
     best_idx = top_indices[np.argmax(probs[top_indices])]
     return int(best_idx)
-
-
-def detectVoice(samples: np.ndarray, sample_rate: int = 16000) -> int:
-    """Basic VAD using energy, pitch, and spectral flatness.
-
-    Returns 1 if voice is detected, otherwise 0."""
-    if samples.size == 0:
-        return 0
-    energy = np.mean(samples ** 2)
-    if energy < 1e-4:
-        return 0
-    spec = np.fft.rfft(samples)
-    mag = np.abs(spec)
-    if mag.size == 0:
-        return 0
-    gm = np.exp(np.mean(np.log(mag + 1e-10)))
-    am = np.mean(mag)
-    flatness = gm / (am + 1e-10)
-    if flatness > 0.5:
-        return 0
-    min_lag = sample_rate // 400
-    max_lag = sample_rate // 70
-    n = samples.size
-    nfft = 1 << ((n + max_lag - 1).bit_length())
-    spec2 = np.fft.rfft(samples, nfft)
-    corr = np.fft.irfft(np.abs(spec2) ** 2, nfft)[:max_lag]
-    corr[:min_lag] = 0
-    peak = np.argmax(corr)
-    if peak <= 0:
-        return 0
-    pitch = sample_rate / peak
-    if pitch < 70 or pitch > 400:
-        return 0
-    return 1
 
 def ensure_ffmpeg_on_path():
     exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
@@ -473,16 +437,7 @@ def run_full_transcribe(
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        if detectVoice(chunk) == 0:
-            prev_tokens = []
-            token_history.clear()
-            offset += (end - start) / sample_rate
-            p = int(min(100, (end / total) * 100))
-            if p > last_p:
-                last_p = p
-                progress_cb(p)
-            continue
-        kwargs = {"language": language, "word_timestamps": word_timestamps}
+        kwargs = {"language": language, "word_timestamps": word_timestamps, "vad_filter": True}
         if beam_search:
             kwargs["beam_size"] = beam_width
             kwargs["best_of"] = n_best
