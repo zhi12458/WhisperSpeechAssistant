@@ -589,13 +589,27 @@ def run_full_transcribe(
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        kwargs = {"language": language, "word_timestamps": word_timestamps, "vad_filter": True}
+        kwargs = {
+            "language": language or "zh",
+            "word_timestamps": word_timestamps,
+            "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": 300},
+            # ↓ 少丢字关键阈值
+            "no_speech_threshold": 0.30,
+            "log_prob_threshold": -1.0,
+            # ↓ 解码策略：稳起步，必要时升温回退
+            "temperature": 0.0,
+            "temperature_increment_on_fallback": 0.2,
+            "patience": 1.0,
+            # 长音频更连贯（整段/连续块）
+            "condition_on_previous_text": True,
+        }
         if beam_search:
-            kwargs["beam_size"] = beam_width
-            kwargs["best_of"] = n_best
+            kwargs["beam_size"] = beam_width      # beam>1 时不必再设 best_of
         else:
             kwargs["beam_size"] = 1
-            kwargs["best_of"] = DEFAULT_TOP_K
+            # 若你想走“快速+采样兜底”，把 temperature 调到 0.3~0.6，并设置：
+            # kwargs["best_of"] = DEFAULT_TOP_K
         if use_context and prev_text:
             if max_prompt_tokens and hf_tokenizer is not None:
                 prompt_tokens = hf_tokenizer.encode(prev_text).ids[-max_prompt_tokens:]
