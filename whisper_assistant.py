@@ -8,6 +8,8 @@ import threading
 import queue
 import shutil
 import subprocess
+import inspect
+import math
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -40,6 +42,47 @@ DEFAULT_N_BEST = 5
 DEFAULT_TOP_K = 4
 TS_PROB_THRESHOLD = 0.01
 TS_PROB_SUM_THRESHOLD = 0.01
+
+
+def build_temperature_schedule(
+    base_temp: float,
+    increment: float,
+    max_temp: float = 1.0,
+    max_steps: int = 10,
+) -> tuple[float, ...]:
+    """Construct a temperature schedule compatible with faster-whisper.
+
+    Args:
+        base_temp: The initial decoding temperature.
+        increment: Step size used when fallback sampling is triggered.
+        max_temp: Upper bound for the generated schedule (default 1.0).
+        max_steps: Maximum number of incremental steps before capping.
+
+    Returns:
+        Tuple of monotonically non-decreasing temperatures.
+    """
+
+    try:
+        base = float(base_temp)
+    except (TypeError, ValueError):
+        base = 0.0
+    try:
+        step = float(increment)
+    except (TypeError, ValueError):
+        step = 0.0
+    if step <= 0.0:
+        return (round(base, 3),)
+    ceiling = float(max(max_temp, base))
+    steps = max(1, math.ceil((ceiling - base) / step))
+    steps = min(max_steps, steps)
+    schedule = [round(base + step * i, 3) for i in range(steps)]
+    schedule.append(round(ceiling, 3))
+    deduped: list[float] = []
+    for temp in schedule:
+        temp = min(temp, ceiling)
+        if not deduped or abs(deduped[-1] - temp) > 1e-6:
+            deduped.append(temp)
+    return tuple(deduped)
 
 
 def sample_best(
@@ -583,14 +626,22 @@ def run_full_transcribe(
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
     hf_tokenizer = getattr(model, "hf_tokenizer", None)
-    temperature_schedule = tuple(round(0.2 * i, 1) for i in range(6))
+    try:
+        transcribe_sig = inspect.signature(model.transcribe)
+    except (TypeError, ValueError):
+        transcribe_sig = None
+    supports_temp_fallback = (
+        transcribe_sig is not None
+        and "temperature_increment_on_fallback" in transcribe_sig.parameters
+    )
+    fallback_increment = 0.2
     for start, end in chunk_iter:
         if end <= start:
             continue
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
-        kwargs = {
+        base_kwargs = {
             "language": language or "zh",
             "word_timestamps": word_timestamps,
             "vad_filter": True,
@@ -599,24 +650,31 @@ def run_full_transcribe(
             "no_speech_threshold": 0.30,
             "log_prob_threshold": -1.0,
             # ↓ 解码策略：稳起步，必要时升温回退
-            "temperature": temperature_schedule,
+            "temperature": 0.0,
+            "temperature_increment_on_fallback": fallback_increment,
             "patience": 1.0,
             # 长音频更连贯（整段/连续块）
             "condition_on_previous_text": True,
         }
         if beam_search:
-            kwargs["beam_size"] = beam_width      # beam>1 时不必再设 best_of
+            base_kwargs["beam_size"] = beam_width      # beam>1 时不必再设 best_of
         else:
-            kwargs["beam_size"] = 1
+            base_kwargs["beam_size"] = 1
             # 若你想走“快速+采样兜底”，把 temperature 调到 0.3~0.6，并设置：
             # kwargs["best_of"] = DEFAULT_TOP_K
+        call_kwargs = dict(base_kwargs)
         if use_context and prev_text:
             if max_prompt_tokens and hf_tokenizer is not None:
                 prompt_tokens = hf_tokenizer.encode(prev_text).ids[-max_prompt_tokens:]
-                kwargs["initial_prompt"] = hf_tokenizer.decode(prompt_tokens)
+                call_kwargs["initial_prompt"] = hf_tokenizer.decode(prompt_tokens)
             else:
-                kwargs["initial_prompt"] = prev_text
-        sub_segments, _ = model.transcribe(audio=chunk, **kwargs)
+                call_kwargs["initial_prompt"] = prev_text
+        if not supports_temp_fallback:
+            increment = call_kwargs.pop("temperature_increment_on_fallback", None)
+            base_temp = call_kwargs.get("temperature", 0.0)
+            schedule = build_temperature_schedule(base_temp, increment)
+            call_kwargs["temperature"] = schedule if len(schedule) > 1 else schedule[0]
+        sub_segments, _ = model.transcribe(audio=chunk, **call_kwargs)
         current_tokens = []
         offset = start / sample_rate
         for seg in sub_segments:
