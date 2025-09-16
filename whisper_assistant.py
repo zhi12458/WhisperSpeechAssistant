@@ -11,6 +11,8 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import numpy as np
+
 # pip install faster-whisper
 from faster_whisper import WhisperModel
 # ``load_audio`` was removed in recent versions of ``faster-whisper``.
@@ -19,6 +21,11 @@ from faster_whisper import WhisperModel
 # Import it here and alias it back to ``load_audio`` so the rest of the
 # codebase can continue to call ``load_audio`` transparently.
 from faster_whisper.audio import decode_audio as load_audio
+
+try:
+    import webrtcvad  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    webrtcvad = None
 
 
 class TranscriptionStopped(Exception):
@@ -148,6 +155,132 @@ def get_media_duration(media_path: str) -> float | None:
         return float(out.strip())
     except Exception:
         return None
+
+
+def compute_vad_segments(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    frame_ms: int = 30,
+    aggressiveness: int = 2,
+    min_speech_duration: float = 0.3,
+    max_silence_duration: float = 0.6,
+    max_segment_duration: float = 30.0,
+    pad_duration: float = 0.2,
+) -> list[tuple[int, int]]:
+    """Split audio into voice segments using WebRTC VAD.
+
+    Args:
+        audio: Audio samples resampled to ``sample_rate``.
+        sample_rate: The sample rate of the audio (Hz).
+        frame_ms: Frame size (ms) for VAD evaluation (10, 20 or 30 ms).
+        aggressiveness: WebRTC VAD aggressiveness (0-3).
+        min_speech_duration: Minimum duration of a voiced region to keep.
+        max_silence_duration: Maximum tolerated silence inside a segment.
+        max_segment_duration: Maximum allowed segment length (seconds).
+        pad_duration: Additional audio kept before/after segments (seconds).
+
+    Returns:
+        A list of ``(start_sample, end_sample)`` tuples representing the
+        voiced segments of the input audio.  If the optional ``webrtcvad``
+        dependency is not installed or segmentation fails, an empty list is
+        returned so callers can fall back to fixed-size windows.
+    """
+
+    if webrtcvad is None:
+        return []
+    if audio.size == 0:
+        return []
+    frame_length = int(sample_rate * (frame_ms / 1000.0))
+    if frame_length <= 0:
+        return []
+    if audio.shape[0] < frame_length:
+        return []
+
+    vad = webrtcvad.Vad(max(0, min(3, aggressiveness)))
+    frame_duration = frame_ms / 1000.0
+    pad_frames = max(0, int(round(pad_duration / frame_duration)))
+    min_speech_frames = max(1, int(round(min_speech_duration / frame_duration)))
+    max_silence_frames = max(1, int(round(max_silence_duration / frame_duration)))
+    max_segment_frames = max(1, int(round(max_segment_duration / frame_duration)))
+
+    samples = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+    pcm16 = (samples * 32768.0).astype(np.int16)
+    total_samples = pcm16.shape[0]
+    remainder = total_samples % frame_length
+    if remainder:
+        pcm16 = np.pad(pcm16, (0, frame_length - remainder), mode="constant")
+    num_frames = pcm16.shape[0] // frame_length
+    if num_frames == 0:
+        return []
+
+    speech_flags: list[bool] = []
+    for idx in range(num_frames):
+        frame = pcm16[idx * frame_length : (idx + 1) * frame_length]
+        try:
+            is_speech = vad.is_speech(frame.tobytes(), sample_rate)
+        except Exception:
+            return []
+        speech_flags.append(bool(is_speech))
+
+    segments: list[tuple[int, int]] = []
+    start_frame: int | None = None
+    last_speech_frame: int | None = None
+    silence_run = 0
+
+    for idx, voiced in enumerate(speech_flags):
+        if voiced:
+            if start_frame is None:
+                start_frame = idx
+            last_speech_frame = idx
+            silence_run = 0
+            current_len = idx - start_frame + 1
+            if current_len >= max_segment_frames:
+                end_frame = idx + 1
+                if current_len >= min_speech_frames:
+                    seg_start = max(0, start_frame - pad_frames)
+                    seg_end = min(num_frames, end_frame + pad_frames)
+                    segments.append((seg_start, seg_end))
+                start_frame = None
+                last_speech_frame = None
+                silence_run = 0
+        else:
+            if start_frame is not None:
+                silence_run += 1
+                if silence_run > max_silence_frames:
+                    effective_end = (
+                        last_speech_frame + 1
+                        if last_speech_frame is not None
+                        else idx
+                    )
+                    seg_len = effective_end - start_frame
+                    if seg_len >= min_speech_frames:
+                        seg_start = max(0, start_frame - pad_frames)
+                        seg_end = min(num_frames, effective_end + pad_frames)
+                        segments.append((seg_start, seg_end))
+                    start_frame = None
+                    last_speech_frame = None
+                    silence_run = 0
+
+    if start_frame is not None and last_speech_frame is not None:
+        effective_end = last_speech_frame + 1
+        seg_len = effective_end - start_frame
+        if seg_len >= min_speech_frames:
+            seg_start = max(0, start_frame - pad_frames)
+            seg_end = min(num_frames, effective_end + pad_frames)
+            segments.append((seg_start, seg_end))
+
+    # Convert frame indices into sample indices and drop zero-length spans.
+    sample_segments: list[tuple[int, int]] = []
+    for seg_start, seg_end in segments:
+        start_sample = int(seg_start * frame_length)
+        end_sample = int(seg_end * frame_length)
+        start_sample = max(0, min(start_sample, total_samples))
+        end_sample = max(start_sample, min(end_sample, total_samples))
+        if end_sample - start_sample >= frame_length:
+            sample_segments.append((start_sample, end_sample))
+
+    return sample_segments
 
 def pick_device_and_compute_type(mode: str = "auto"):
     warn = None
@@ -409,7 +542,7 @@ def run_full_transcribe(
     beam_width: int = DEFAULT_BEAM_WIDTH,
     n_best: int = DEFAULT_N_BEST,
     overlap: float = 1.0,
-):
+): 
     """
     Process the entire audio in ~30s windows, accumulating segments.
     This mimics the "runFull" strategy where the whole file is read
@@ -426,6 +559,22 @@ def run_full_transcribe(
     chunk_samples = sample_rate * 30
     overlap_samples = int(overlap * sample_rate)
     stride = chunk_samples - overlap_samples if chunk_samples > overlap_samples else chunk_samples
+    vad_segments = compute_vad_segments(
+        audio,
+        sample_rate,
+        max_segment_duration=chunk_samples / sample_rate,
+        pad_duration=min(overlap, 0.3),
+    )
+    use_vad = bool(vad_segments)
+    if use_vad:
+        logger(f"[DEBUG] VAD segmentation produced {len(vad_segments)} spans")
+    else:
+        logger("[DEBUG] VAD unavailable or produced no spans, using fixed windows")
+    chunk_iter = (
+        vad_segments
+        if use_vad
+        else ((start, min(total, start + chunk_samples)) for start in range(0, total, stride))
+    )
     segments = []
     last_end = 0.0
     last_p = 0
@@ -434,8 +583,9 @@ def run_full_transcribe(
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
     hf_tokenizer = getattr(model, "hf_tokenizer", None)
-    for start in range(0, total, stride):
-        end = min(total, start + chunk_samples)
+    for start, end in chunk_iter:
+        if end <= start:
+            continue
         if stop_event and stop_event.is_set():
             raise TranscriptionStopped()
         chunk = audio[start:end]
