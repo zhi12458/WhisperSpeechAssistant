@@ -583,6 +583,7 @@ def run_full_transcribe(
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
     hf_tokenizer = getattr(model, "hf_tokenizer", None)
+    temperature_schedule = tuple(round(0.2 * i, 1) for i in range(6))
     for start, end in chunk_iter:
         if end <= start:
             continue
@@ -598,8 +599,7 @@ def run_full_transcribe(
             "no_speech_threshold": 0.30,
             "log_prob_threshold": -1.0,
             # ↓ 解码策略：稳起步，必要时升温回退
-            "temperature": 0.0,
-            "temperature_increment_on_fallback": 0.2,
+            "temperature": temperature_schedule,
             "patience": 1.0,
             # 长音频更连贯（整段/连续块）
             "condition_on_previous_text": True,
