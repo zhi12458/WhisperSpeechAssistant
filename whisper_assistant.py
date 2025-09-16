@@ -746,19 +746,41 @@ def transcribe_with_progress(
         else:
             logger(f"[INFO] Using device={device}, compute_type={compute_type}")
             try:
-                segments, _ = run_full_transcribe(
-                    model,
-                    media_path,
-                    language,
-                    logger,
-                    progress_cb,
-                    stop_event,
-                    word_timestamps=word_timestamps,
-                    use_context=use_context,
-                    beam_search=beam_search,
-                    beam_width=beam_width,
-                    n_best=n_best,
-                )
+                duration = get_media_duration(media_path)
+                if not duration or duration <= 0:
+                    progress_cb(("mode", "indeterminate"))
+                else:
+                    progress_cb(("mode", "determinate"))
+                    progress_cb(0)
+
+                segments = []
+                last_p = 0
+
+                kwargs = {"language": language, "word_timestamps": word_timestamps}
+                if beam_search:
+                    kwargs["beam_size"] = beam_width
+                else:
+                    kwargs["beam_size"] = 1
+                    kwargs["best_of"] = DEFAULT_TOP_K
+                kwargs["vad_filter"] = True
+                kwargs["vad_parameters"] = {"min_silence_duration_ms": 300}
+
+                sub_segments_iter, _ = model.transcribe(audio=media_path, **kwargs)
+
+                for seg in sub_segments_iter:
+                    segments.append(seg)
+                    logger(
+                        f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+                    )
+                    if duration and duration > 0:
+                        p = int(min(100, max(0, (seg.end / duration) * 100)))
+                        if p > last_p:
+                            last_p = p
+                            progress_cb(p)
+                    if stop_event and stop_event.is_set():
+                        raise TranscriptionStopped()
+
+                progress_cb(100)
             except RuntimeError as e:
                 if (
                     device_mode == "auto"
@@ -771,19 +793,41 @@ def transcribe_with_progress(
                     logger(
                         f"[INFO] Using device={device}, compute_type={compute_type}"
                     )
-                    segments, _ = run_full_transcribe(
-                        model,
-                        media_path,
-                        language,
-                        logger,
-                        progress_cb,
-                        stop_event,
-                        word_timestamps=word_timestamps,
-                        use_context=use_context,
-                        beam_search=beam_search,
-                        beam_width=beam_width,
-                        n_best=n_best,
-                    )
+                    duration = get_media_duration(media_path)
+                    if not duration or duration <= 0:
+                        progress_cb(("mode", "indeterminate"))
+                    else:
+                        progress_cb(("mode", "determinate"))
+                        progress_cb(0)
+
+                    segments = []
+                    last_p = 0
+
+                    kwargs = {"language": language, "word_timestamps": word_timestamps}
+                    if beam_search:
+                        kwargs["beam_size"] = beam_width
+                    else:
+                        kwargs["beam_size"] = 1
+                        kwargs["best_of"] = DEFAULT_TOP_K
+                    kwargs["vad_filter"] = True
+                    kwargs["vad_parameters"] = {"min_silence_duration_ms": 300}
+
+                    sub_segments_iter, _ = model.transcribe(audio=media_path, **kwargs)
+
+                    for seg in sub_segments_iter:
+                        segments.append(seg)
+                        logger(
+                            f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
+                        )
+                        if duration and duration > 0:
+                            p = int(min(100, max(0, (seg.end / duration) * 100)))
+                            if p > last_p:
+                                last_p = p
+                                progress_cb(p)
+                        if stop_event and stop_event.is_set():
+                            raise TranscriptionStopped()
+
+                    progress_cb(100)
                 else:
                     raise
         base, _ = os.path.splitext(media_path)
