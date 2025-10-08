@@ -8,6 +8,7 @@ import threading
 import queue
 import shutil
 import subprocess
+from collections import deque
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -433,9 +434,59 @@ def run_full_transcribe(
     last_p = 0
     token_history = []
     prev_text = ""
+    context_segments = deque()
+    total_prompt_tokens = 0
     n_max_text_ctx = getattr(model, "max_length", 0)
     max_prompt_tokens = n_max_text_ctx // 2 if n_max_text_ctx else 0
+    # ``max_prompt_chars`` provides a rough text-length cap when token ids are
+    # unavailable.  The multiplier keeps the prompt within the same order of
+    # magnitude as the token budget for typical English text (~4 characters per
+    # token) and prevents the context string from growing without bound.
+    max_prompt_chars = max_prompt_tokens * 4 if max_prompt_tokens else 0
     hf_tokenizer = getattr(model, "hf_tokenizer", None)
+
+    def trim_prev_text(latest_text: str | None = None, latest_tokens: int = 0) -> None:
+        nonlocal prev_text, total_prompt_tokens
+        if latest_text and hf_tokenizer is None and max_prompt_tokens:
+            token_count = max(latest_tokens, 0)
+            context_segments.append((latest_text, token_count))
+            total_prompt_tokens += token_count
+        if not prev_text or not max_prompt_tokens:
+            return
+        if hf_tokenizer is not None:
+            ids = hf_tokenizer.encode(prev_text).ids
+            if len(ids) > max_prompt_tokens:
+                prev_text = hf_tokenizer.decode(ids[-max_prompt_tokens:])
+            return
+        while context_segments and total_prompt_tokens > max_prompt_tokens:
+            removed_text, removed_tokens = context_segments.popleft()
+            prev_text = prev_text[len(removed_text):]
+            total_prompt_tokens = max(total_prompt_tokens - removed_tokens, 0)
+        if latest_text and hf_tokenizer is None and not prev_text and max_prompt_tokens:
+            approx_tokens = min(max(latest_tokens, 0), max_prompt_tokens)
+            if approx_tokens:
+                avg_chars = len(latest_text) / max(latest_tokens, 1)
+                keep_chars = max(int(approx_tokens * avg_chars), approx_tokens)
+            else:
+                keep_chars = max_prompt_chars if max_prompt_chars else len(latest_text)
+            keep_chars = min(keep_chars, len(latest_text))
+            prev_text = latest_text[-keep_chars:]
+            context_segments.clear()
+            kept_tokens = approx_tokens if approx_tokens else 0
+            total_prompt_tokens = kept_tokens
+            context_segments.append((prev_text, kept_tokens))
+        if total_prompt_tokens == 0 and max_prompt_chars and len(prev_text) > max_prompt_chars:
+            trim_chars = len(prev_text) - max_prompt_chars
+            prev_text = prev_text[trim_chars:]
+            while context_segments and trim_chars > 0:
+                seg_text, seg_tokens = context_segments[0]
+                if len(seg_text) <= trim_chars:
+                    trim_chars -= len(seg_text)
+                    total_prompt_tokens = max(total_prompt_tokens - seg_tokens, 0)
+                    context_segments.popleft()
+                else:
+                    context_segments[0] = (seg_text[trim_chars:], seg_tokens)
+                    trim_chars = 0
     for start in range(0, total, stride):
         end = min(total, start + chunk_samples)
         if stop_event and stop_event.is_set():
@@ -449,11 +500,8 @@ def run_full_transcribe(
             kwargs["beam_size"] = 1
             kwargs["best_of"] = DEFAULT_TOP_K
         if use_context and prev_text:
-            if max_prompt_tokens and hf_tokenizer is not None:
-                prompt_tokens = hf_tokenizer.encode(prev_text).ids[-max_prompt_tokens:]
-                kwargs["initial_prompt"] = hf_tokenizer.decode(prompt_tokens)
-            else:
-                kwargs["initial_prompt"] = prev_text
+            trim_prev_text()
+            kwargs["initial_prompt"] = prev_text
         if max_len is not None:
             kwargs["max_len"] = max_len
         if max_tokens is not None:
@@ -472,12 +520,12 @@ def run_full_transcribe(
                     f"[SEG {len(segments)}] {format_timestamp(seg.start)} --> {format_timestamp(seg.end)} {seg.text.strip()}"
                 )
                 if use_context:
-                    current_tokens.extend(seg.tokens)
-                    prev_text += seg.text
-                    if max_prompt_tokens and hf_tokenizer is not None:
-                        ids = hf_tokenizer.encode(prev_text).ids
-                        if len(ids) > max_prompt_tokens:
-                            prev_text = hf_tokenizer.decode(ids[-max_prompt_tokens:])
+                    tokens = seg.tokens or []
+                    text = seg.text or ""
+                    current_tokens.extend(tokens)
+                    if text:
+                        prev_text += text
+                        trim_prev_text(text, len(tokens))
                 last_end = seg.end
         if use_context:
             token_history.append(current_tokens)
